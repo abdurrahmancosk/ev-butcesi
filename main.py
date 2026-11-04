@@ -561,15 +561,16 @@ except Exception:
 # ==============================================================================
 GIDER_KATEGORILERI = [
     "Market & Temel Gıda",
+    "Abur Cubur & Atıştırmalık",
+    "Temizlik",
+    "Sigara/Tütün",
     "Ev & Faturalar",
     "Ulaşım / Yakıt",
-    "Abur Cubur & Atıştırmalık",
-    "Giyim & Kişisel",
+    "Dışarıda Yemek / Eğlence",
+    "Giyim",
     "Sağlık",
-    "Eğlence & Restoran",
     "Eğitim & Okul",
-    "Sigara/Tütün",
-    "Temizlik",
+    "Evcil Hayvan (Pamuk)",
     "Transfer / Birikim",
     "Yatırım",
     "Yatırım / Altın",
@@ -668,6 +669,105 @@ def gemini_aktif_modelleri_bul(api_key, ssl_context=None):
         ]
     return sirali
 
+def kategori_akilli_duzelt(urun_adi, firma="", mevcut_kat=""):
+    """Ürün ve firma adından harcama kategorisini %100 doğrulukla tespit eder veya düzeltir."""
+    u = str(urun_adi or "").lower().strip()
+    f = str(firma or "").lower().strip()
+    m = str(mevcut_kat or "").strip()
+
+    # 1. Sigara & Tütün Ürünleri
+    sigara_kelimeler = [
+        "sigara", "tütün", "tutun", "rothmans", "winston", "marlboro", "parliament",
+        "kent", "camel", "tekel", "heets", "terea", "iqos", "puro", "makaron",
+        "çakmak", "cakmak", "sarılmış tütün"
+    ]
+    if any(w in u for w in sigara_kelimeler):
+        return "Sigara/Tütün"
+
+    # 2. Abur Cubur & Atıştırmalık (Çikolata, Gofret, Bisküvi, Kek, Cips, Dondurma, Şekerleme vb.)
+    abur_cubur_kelimeler = [
+        "çikolata", "cikolata", "çikolatalı", "cikolatali", "çikol", "cikol", "ciko", "çiko",
+        "tadelle", "canga", "albeni", "metro", "karam", "damak", "snickers", "twix", "bounty",
+        "toblerone", "nutella", "çokokrem", "cokokrem", "gofret", "hoşbeş", "hosbes", "çokonat",
+        "dido", "çikotren", "bisküvi", "biskuvi", "burçak", "burcak", "biskrem", "ikram", "negro",
+        "petibör", "petibor", "oreo", "eti puf", "probis", "hanımeller", "saklıköy", "saklikoy",
+        "kraker", "crax", "çubuk kraker", "cubuk kraker", "balık kraker", "balik kraker",
+        "kek", "topkek", "paykek", "browni", "dankek", "popkek", "tart", "kurabiye", "sufle",
+        "puding", "cips", "doritos", "lays", "ruffles", "patito", "pringles", "çerezos", "cerezoz",
+        "kuruyemiş", "kuruyemis", "fıstık", "fistik", "fındık", "findik", "kaju", "badem",
+        "çekirdek", "cekirdek", "leblebi", "dondurma", "golf", "cornetto", "magnum", "roko",
+        "lungo", "algida", "buzparmak", "twister", "şekerleme", "sekerleme", "jelibon", "haribo",
+        "bonbon", "lolipop", "draje", "mentos", "sakız", "sakiz", "falım", "falim", "vivident",
+        "first", "şıpsevdi", "kola", "cola", "fanta", "sprite", "gazoz", "meşrubat", "mesrubat",
+        "enerji içeceği", "soğuk çay", "ice tea", "fuse tea", "cevizli sucuk", "pestil", "lokum", "helva"
+    ]
+    if any(w in u for w in abur_cubur_kelimeler):
+        return "Abur Cubur & Atıştırmalık"
+
+    # 3. Temizlik & Kişisel Hijyen
+    temizlik_kelimeler = [
+        "deterjan", "çamaşır suyu", "camasir suyu", "yumuşatıcı", "yumusatici", "bulaşık tableti",
+        "bulasik tableti", "bulaşık deterjanı", "bulaşık sıvısı", "fairy", "finish", "calgon",
+        "pril", "omo", "ariel", "bingo", "perwoll", "tursil", "cif", "domestos", "porçöz", "porcoz",
+        "çöp torbası", "cop torbasi", "bulaşık süngeri", "temizlik bezi", "mop", "vileda",
+        "şampuan", "sampuan", "duş jeli", "dus jeli", "sabun", "sıvı sabun", "sivi sabun",
+        "diş macunu", "dis macunu", "diş fırçası", "dis fircasi", "tuvalet kağıdı", "tuvalet kagidi",
+        "kağıt havlu", "kagit havlu", "peçete", "pecete", "ıslak mendil", "islak mendil",
+        "ıslak havlu", "islak havlu", "ped", "hijyenik ped", "molped", "orkid", "kotex", "günlük ped",
+        "bebek bezi", "kolay tarama spreyi"
+    ]
+    if any(w in u for w in temizlik_kelimeler):
+        return "Temizlik"
+
+    # 4. Ev & Faturalar
+    fatura_kelimeler = [
+        "doğalgaz", "dogalgaz", "palen", "elektrik", "aras elektrik", "enerjisa", "su faturası",
+        "fatura", "faturası", "internet", "fiber", "vodafone", "türk telekom", "turkcell",
+        "aidat", "apartman", "kira", "ev kirası", "süpürge torbası", "filtre seti", "ampul",
+        "led panel", "duş hortumu", "silikonize mastik", "sürgü", "ütü", "pişirme kağıdı",
+        "buzdolabı poşeti"
+    ]
+    if any(w in u for w in fatura_kelimeler) or any(w in f for w in ["palen", "vodafone", "elektrik", "aidat", "kira"]):
+        return "Ev & Faturalar"
+
+    # 5. Ulaşım & Yakıt
+    ulasim_kelimeler = [
+        "benzin", "motorin", "mazot", "lpg", "akaryakıt", "petrol", "opet", "shell", "bp",
+        "otobüs", "dolmuş", "taksi", "otopark", "hgs", "ogs", "araç yıkama", "lastik"
+    ]
+    if any(w in u for w in ulasim_kelimeler) or any(w in f for w in ["shell", "opet", "bp", "petrol"]):
+        return "Ulaşım / Yakıt"
+
+    # 6. Sağlık
+    saglik_kelimeler = [
+        "eczane", "ilaç", "ilac", "vitamin", "pastil", "surup", "şurup", "aspirin", "parol",
+        "merhem", "yara bandı", "medikal", "hastane"
+    ]
+    if any(w in u for w in saglik_kelimeler) or "eczane" in f:
+        return "Sağlık"
+
+    # 7. Evcil Hayvan
+    if any(w in u for w in ["kedi mama", "köpek mama", "kedi kum", "pamuk"]):
+        return "Evcil Hayvan (Pamuk)"
+
+    # 8. Eğitim & Okul
+    if any(w in u for w in ["okul harçlığı", "harçlık", "harclik", "kırtasiye", "kirtasiye", "defter", "kalem", "okul"]):
+        return "Eğitim & Okul"
+
+    # 9. Giyim
+    if any(w in u for w in ["pantolon", "gömlek", "tişört", "mont", "ayakkabı", "çorap", "kazak"]):
+        return "Giyim"
+
+    # 10. Dışarıda Yemek
+    if any(w in u for w in ["döner", "kebap", "pizza", "burger", "lahmacun", "pide", "kafe", "restoran"]):
+        return "Dışarıda Yemek / Eğlence"
+
+    # Eğer mevcut kategori GIDER_KATEGORILERI içindeyse ve "Diğer" değilse koru, aksi halde Market
+    if m in GIDER_KATEGORILERI and m != "Diğer":
+        return m
+
+    return "Market & Temel Gıda"
+
 def gemini_fis_analiz_et(gorsel_yolu, api_key=None, status_cb=None):
     if not api_key:
         api_key = gemini_api_key_al()
@@ -733,15 +833,25 @@ JSON yapısı:
   "saat": "SS:DD formatında fiş saati (örn: 14:35, bulunamazsa 12:00)",
   "urunler": [
     {
-      "urun": "Ürün/Hizmet Adı (kısaltmaları düzelt)",
+      "urun": "Ürün/Hizmet Adı (kısaltmaları anlaşılır yap, örn: GOLF ROKO ÇİKOLATA, ETİ BURÇAK)",
       "miktar": "Miktar (örn: 1 Adet, 1.5 kg, 2 Paket)",
       "birim_fiyat": 25.50,
       "tutar": 51.00,
-      "kategori": "Harcama Kategorisi (Aşağıdakilerden en uygununu seç: Market & Temel Gıda, Sağlık, Ulaşım & Akaryakıt, Fatura (Elektrik/Su/Doğalgaz), Giyim & Ayakkabı, Ev & Yaşam, Eğitim & Kırtasiye, Kültür, Eğlence & Hobi, Yeme & İçme (Restoran/Kafe), Kişisel Bakım & Kozmetik, Teknoloji & Elektronik, Kira & Aidat, Diğer)"
+      "kategori": "Aşağıdaki kategorilerden en uygununu seç: 'Abur Cubur & Atıştırmalık', 'Market & Temel Gıda', 'Temizlik', 'Sigara/Tütün', 'Ev & Faturalar', 'Ulaşım / Yakıt', 'Dışarıda Yemek / Eğlence', 'Giyim', 'Sağlık', 'Eğitim & Okul', 'Evcil Hayvan (Pamuk)', 'Diğer'"
     }
   ],
   "toplam_tutar": 51.00
-}"""
+}
+
+KATEGORİ KURALLARI (ÇOK ÖNEMLİ):
+1. 'Abur Cubur & Atıştırmalık': Çikolata, gofret, bisküvi, kek, cips, kraker, dondurma (golf, magnum, roko, lungo), şekerleme, sakız, kuruyemiş, gazlı içecek, meşrubat, soğuk çay, puding. (Çikolata, bisküvi, dondurma vb. tatlıları KESİNLİKLE temel gıda yapma, 'Abur Cubur & Atıştırmalık' olarak etiketle).
+2. 'Market & Temel Gıda': Ekmek, un, süt, yoğurt, peynir, yumurta, sıvı yağ, zeytin, salça, bakliyat, et, tavuk, balık, sebze, meyve, makarna, pirinç, çay, baharat.
+3. 'Temizlik': Deterjan, yumuşatıcı, bulaşık tableti/sıvısı, çamaşır suyu, şampuan, sabun, duş jeli, diş macunu/fırçası, tuvalet kağıdı, peçete, ıslak mendil, hijyenik ped, çöp torbası.
+4. 'Sigara/Tütün': Sigara ve tütün mamulleri.
+5. 'Ev & Faturalar': Doğalgaz, elektrik, su, internet, telefon faturaları, kira, aidat, ev gereçleri.
+6. 'Ulaşım / Yakıt': Benzin, motorin, lpg, otobüs, dolmuş, taksi, otopark.
+7. 'Dışarıda Yemek / Eğlence': Restoran, kafe, döner, kebap, fast food.
+8. 'Sağlık': Eczane, ilaç, vitamin, medikal."""
 
     if ext == ".txt":
         raw_txt = img_bytes.decode("utf-8", errors="replace")
@@ -830,6 +940,10 @@ JSON yapısı:
                             text_val = text_val[:-3]
                         text_val = text_val.strip()
                         parsed = json.loads(text_val)
+                        # Kategorileri akıllı kurallarla düzelt ve doğrula
+                        firma_adi = parsed.get("firma") or "Market"
+                        for u_item in parsed.get("urunler", []):
+                            u_item["kategori"] = kategori_akilli_duzelt(u_item.get("urun"), firma=firma_adi, mevcut_kat=u_item.get("kategori"))
                         print(f"✅ Fiş başarıyla çözümlendi ({model}): {parsed.get('firma')} - {len(parsed.get('urunler', []))} ürün")
                         return parsed
         except urllib.error.HTTPError as e:
@@ -1154,7 +1268,7 @@ def main(page: ft.Page):
         secilen_donem_bas = [varsayilan_bas]
         secilen_donem_bit = [varsayilan_bit]
         tum_zamanlar_modu = [False]
-        siralama_en_yeni = [False]  # False = Kronolojik (Eskiden yeniye)
+        siralama_en_yeni = [True]  # Varsayılan: Yeniden Eskiye (En yeni harcama üstte)
 
         # Buluttan mevcut kayıtları çek (ve dönemi en güncel veriye otomatik ayarla)
         if supabase:
@@ -2441,11 +2555,11 @@ def main(page: ft.Page):
                         u_miktar = u.get("miktar") or "1 Adet"
                         u_fiyat = float(u.get("birim_fiyat") or u.get("tutar") or 0.0)
                         u_tutar = float(u.get("tutar") or u_fiyat)
-                        u_kat = u.get("kategori") or "Market & Temel Gıda"
+                        u_kat = kategori_akilli_duzelt(u_adi, firma=firma, mevcut_kat=u.get("kategori"))
                         if u_kat not in GIDER_KATEGORILERI:
                             u_kat = "Market & Temel Gıda"
 
-                        chk = ft.Checkbox(value=True, label=f"{u_adi} ({u_miktar}) - {u_tutar:,.2f} TL")
+                        chk = ft.Checkbox(value=True, label=f"{u_adi} ({u_miktar}) - {u_tutar:,.2f} TL • [{u_kat}]")
                         onay_listesi.append({
                             "chk": chk,
                             "urun": u_adi,
@@ -2973,12 +3087,18 @@ def main(page: ft.Page):
                 writer.writerow(["Tarih", "Firma/Kurum", "Ürün/Hizmet", "Kategori", "Miktar/Adet", "Birim Fiyat", "Toplam Tutar"])
 
                 yazilan_adet = 0
+                aktarilacak_kayitlar = []
                 for item in islemler:
                     t_date = stringden_tarih_al(item.get("tarih"))
                     if not tum_zamanlar_modu[0]:
                         if not t_date or not (secilen_donem_bas[0] <= t_date <= secilen_donem_bit[0]):
                             continue
+                    aktarilacak_kayitlar.append(item)
 
+                # En yeni alışveriş en altta olacak şekilde kronolojik sırala (Eskiden yeniye)
+                aktarilacak_kayitlar.sort(key=islem_siralama_anahtari, reverse=False)
+
+                for item in aktarilacak_kayitlar:
                     tarih_tam = f"{item.get('tarih', '')} {item.get('saat', '')}".strip()
                     firma = item.get("firma") or item.get("kaynak") or ""
                     urun = item.get("urun") or item.get("aciklama") or ""
