@@ -3402,6 +3402,7 @@ def main(page: ft.Page):
 
             # 2. SEÇİLİ DÖNEM HESAPLAMASI (O Ayın Gelir ve Gideri)
             donem_gelir = 0.0
+            donem_gider = 0.0
             donem_kasa_harcamasi = 0.0
             donem_kullanici_harcamalari = {}
             donem_kullaniciya_aktarilan = {}
@@ -3441,6 +3442,7 @@ def main(page: ft.Page):
                     alici = item.get("kaynak") or "Aile Üyesi"
                     donem_kullaniciya_aktarilan[alici] = donem_kullaniciya_aktarilan.get(alici, 0.0) + tutar
                 elif islem_turu_val == "Gider":
+                    donem_gider += tutar
                     donem_toplam_harcama += tutar
                     toplam_donem_gider_sayisi += 1
                     if islem_sahibi != "Ev Yöneticisi":
