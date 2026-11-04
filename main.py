@@ -3085,9 +3085,9 @@ def main(page: ft.Page):
 
         yetki_metni = "👑 Ev Yöneticisi Paneli" if yonetici_mi else "👤 Aile Üyesi Paneli"
 
-        def cikis_yap_aksiyon(e):
+        def cikis_yap_aksiyon(e=None):
             oturum_sil()
-            main(page)
+            giris_ekranina_git()
 
         # Dönem Seçim Araç Çubuğu (2 Kademeli, Asla Kırpılmayan ve Taşmayan Tasarım)
         onceki_btn = make_button("◀", width=36, height=32, outlined=True, tooltip="Önceki Bütçe Dönemi", on_click=lambda _: donem_kaydir("onceki"))
@@ -3610,50 +3610,61 @@ def main(page: ft.Page):
         except Exception as ex_h_start:
             print("Açılış otomatik harçlık kontrol hatası:", ex_h_start)
 
+    def giris_ekranina_git():
+        if hasattr(page, "clean"):
+            try:
+                page.clean()
+            except Exception:
+                page.controls.clear()
+        else:
+            page.controls.clear()
+
+        # Giriş Ekranı Bileşenleri
+        kullanici_adi = ft.TextField(label="Kullanıcı Adı (yönetici / üye)", width=320)
+        sifre = ft.TextField(label="Şifre", password=True, can_reveal_password=True, width=320)
+        beni_hatirla = ft.Checkbox(label="Beni Hatırla", value=True)
+        hata_mesaji = ft.Text("", color="red")
+
+        def giris_yap(e):
+            ad = kullanici_adi.value.strip().lower()
+            pass_val = sifre.value.strip()
+
+            if ad == "yönetici" and pass_val == "1234":
+                if beni_hatirla.value:
+                    oturum_kaydet("Ev Yöneticisi", True)
+                ana_ekrana_git("Ev Yöneticisi", yonetici_mi=True)
+            elif ad == "üye" and pass_val == "5678":
+                if beni_hatirla.value:
+                    oturum_kaydet("Aile Üyesi", False)
+                ana_ekrana_git("Aile Üyesi", yonetici_mi=False)
+            else:
+                hata_mesaji.value = "Hatalı kullanıcı adı veya şifre!"
+                page.update()
+
+        page.add(
+            ft.Column([
+                ft.Container(height=60),
+                ft.Text("🏠 Hane Bütçesi Giriş", size=24, weight=ft.FontWeight.BOLD),
+                ft.Container(height=10),
+                kullanici_adi,
+                sifre,
+                ft.Container(content=ft.Row([beni_hatirla], alignment=ft.MainAxisAlignment.START), width=320),
+                ft.Container(height=5),
+                make_button("Giriş Yap", icon=ft.Icons.LOGIN, bgcolor="blue", color="white", width=320, height=45, on_click=giris_yap),
+                hata_mesaji
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+        )
+
+        kullanici_adi.on_submit = giris_yap
+        sifre.on_submit = giris_yap
+        page.update()
+
     # Oturum Kontrolü
     kayitli_oturum = oturum_oku()
     if kayitli_oturum and "kullanici" in kayitli_oturum and "yonetici_mi" in kayitli_oturum:
         ana_ekrana_git(kayitli_oturum["kullanici"], kayitli_oturum["yonetici_mi"])
-        return
-
-    # Giriş Ekranı
-    kullanici_adi = ft.TextField(label="Kullanıcı Adı (yönetici / üye)", width=320)
-    sifre = ft.TextField(label="Şifre", password=True, can_reveal_password=True, width=320)
-    beni_hatirla = ft.Checkbox(label="Beni Hatırla", value=True)
-    hata_mesaji = ft.Text("", color="red")
-
-    def giris_yap(e):
-        ad = kullanici_adi.value.strip().lower()
-        pass_val = sifre.value.strip()
-
-        if ad == "yönetici" and pass_val == "1234":
-            if beni_hatirla.value:
-                oturum_kaydet("Ev Yöneticisi", True)
-            ana_ekrana_git("Ev Yöneticisi", yonetici_mi=True)
-        elif ad == "üye" and pass_val == "5678":
-            if beni_hatirla.value:
-                oturum_kaydet("Aile Üyesi", False)
-            ana_ekrana_git("Aile Üyesi", yonetici_mi=False)
-        else:
-            hata_mesaji.value = "Hatalı kullanıcı adı veya şifre!"
-            page.update()
-
-    page.add(
-        ft.Column([
-            ft.Container(height=60),
-            ft.Text("🏠 Hane Bütçesi Giriş", size=24, weight=ft.FontWeight.BOLD),
-            ft.Container(height=10),
-            kullanici_adi,
-            sifre,
-            ft.Container(content=ft.Row([beni_hatirla], alignment=ft.MainAxisAlignment.START), width=320),
-            ft.Container(height=5),
-            make_button("Giriş Yap", icon=ft.Icons.LOGIN, bgcolor="blue", color="white", width=320, height=45, on_click=giris_yap),
-            hata_mesaji
-        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-    )
-
-    kullanici_adi.on_submit = giris_yap
-    sifre.on_submit = giris_yap
+    else:
+        giris_ekranina_git()
 
 if __name__ == "__main__":
     if hasattr(ft, "run"):
