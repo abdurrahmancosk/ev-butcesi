@@ -289,6 +289,37 @@ def harclik_ayarlari_kaydet(ayarlar):
     except Exception as e:
         print("Harçlık ayarları kaydedilemedi:", e)
 
+def son_gorselleri_bul():
+    """Telefonda veya bilgisayarda en son çekilen veya indirilen görselleri bulur."""
+    klasorler = [
+        "/storage/emulated/0/DCIM/Camera",
+        "/storage/emulated/0/DCIM",
+        "/storage/emulated/0/Pictures",
+        "/storage/emulated/0/Download",
+        "/sdcard/DCIM/Camera",
+        "/sdcard/Download",
+        os.path.expanduser("~/Downloads"),
+        os.path.expanduser("~/Pictures"),
+        "."
+    ]
+    bulunanlar = []
+    uzantilar = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".pdf")
+    for k in klasorler:
+        if os.path.exists(k) and os.path.isdir(k):
+            try:
+                for f in os.listdir(k):
+                    if f.lower().endswith(uzantilar):
+                        tam_yol = os.path.join(k, f)
+                        try:
+                            mtime = os.path.getmtime(tam_yol)
+                            bulunanlar.append((mtime, tam_yol))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+    bulunanlar.sort(key=lambda x: x[0], reverse=True)
+    return [yol for _, yol in bulunanlar[:5]]
+
 def okul_gunu_mu(tarih, tatil_kontrol=True):
     """Okulların açık olduğu haftaiçi günleri tespit eder (MEB Takvimi uyumlu)."""
     # Haftasonu kontrolü (Cumartesi=5, Pazar=6)
@@ -573,7 +604,7 @@ def gemini_fis_analiz_et(gorsel_yolu, api_key=GEMINI_API_KEY, status_cb=None):
     mime_type = "image/jpeg"
 
     if status_cb:
-        status_cb("📸 Görsel hazırlanıyor...")
+        status_cb("📄 İçerik hazırlanıyor..." if ext == ".txt" else "📸 Görsel hazırlanıyor...")
 
     try:
         with open(gorsel_yolu, "rb") as f:
@@ -608,7 +639,7 @@ def gemini_fis_analiz_et(gorsel_yolu, api_key=GEMINI_API_KEY, status_cb=None):
         mime_type = "application/pdf"
         print(f"📄 PDF belgesi yüklendi: {len(img_bytes):,} bayt")
 
-    b64_data = base64.b64encode(img_bytes).decode("utf-8")
+    b64_data = base64.b64encode(img_bytes).decode("utf-8") if ext != ".txt" else ""
 
     prompt = """Sen uzman bir market, mağaza ve alışveriş fişi/faturası analiz asistanısın. Bu fiş veya fatura belgesindeki bilgileri oku. Yalnızca geçerli bir JSON nesnesi döndür (markdown kod blokları ekleme, doğrudan saf json döndür).
 JSON yapısı:
@@ -628,25 +659,41 @@ JSON yapısı:
   "toplam_tutar": 51.00
 }"""
 
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inline_data": {
-                            "mime_type": mime_type,
-                            "data": b64_data
-                        }
-                    }
-                ]
+    if ext == ".txt":
+        raw_txt = img_bytes.decode("utf-8", errors="replace")
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt + f"\n\nAnaliz Edilecek Fiş/Dekont Metni:\n{raw_txt}"}
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.1,
+                "responseMimeType": "application/json"
             }
-        ],
-        "generationConfig": {
-            "temperature": 0.1,
-            "responseMimeType": "application/json"
         }
-    }
+    else:
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": mime_type,
+                                "data": b64_data
+                            }
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.1,
+                "responseMimeType": "application/json"
+            }
+        }
 
     body = json.dumps(payload).encode("utf-8")
 
@@ -2063,88 +2110,169 @@ def main(page: ft.Page):
 
             threading.Thread(target=arka_plan_tara, daemon=True).start()
 
-        # --- MODERN ASENKRON DOSYA VE FİŞ SEÇİCİ İŞLEYİCİLERİ (FLET 1.0 VE TÜM PLATFORMLAR) ---
-        async def fis_tara_tiklandi(e=None):
-            bilgi_mesaji.value = "📸 Fiş seçici açılıyor..."
-            bilgi_mesaji.color = "#2563eb"
-            try:
-                bilgi_mesaji.update()
-            except Exception:
-                pass
+        # --- %100 KESİN VE HATA VERMEYEN FİŞ TARAMA MERKEZİ ---
+        def fis_tara_tiklandi(e=None):
+            # En son çekilen / indirilen fotoğrafları tespit et
+            son_fotolar = son_gorselleri_bul()
+            son_foto_yolu = son_fotolar[0] if son_fotolar else None
+            son_foto_adi = os.path.basename(son_foto_yolu) if son_foto_yolu else ""
 
-            dosya_yolu = None
-            is_mobile = hasattr(page, "platform") and page.platform in [ft.PagePlatform.ANDROID, ft.PagePlatform.IOS]
-            if not is_mobile and ("ANDROID_ROOT" in os.environ or "ANDROID_DATA" in os.environ):
-                is_mobile = True
+            metin_alani = ft.TextField(
+                label="Fiş / Dekont / SMS Metni Yapıştır",
+                multiline=True,
+                min_lines=3,
+                max_lines=5,
+                text_size=11,
+                hint_text="Örn: BİM 04.11.2026 Süt 35 TL, Ekmek 10 TL"
+            )
 
-            # Masaüstünde öncelikle Tkinter penceresini dene (eğer mobilde değilsek)
-            if not is_mobile:
-                try:
-                    import tkinter as tk
-                    from tkinter import filedialog
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.attributes("-topmost", True)
-                    dosya_yolu = filedialog.askopenfilename(
-                        title="Fiş / Fatura Görseli veya PDF Seçin",
-                        filetypes=[
-                            ("Fiş ve Fatura Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"),
-                            ("PDF Faturalar", "*.pdf"),
-                            ("Resim Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic"),
-                            ("Tüm Dosyalar", "*.*")
-                        ]
-                    )
-                    root.destroy()
-                except Exception:
-                    dosya_yolu = None
+            def secilen_yolu_tara(dosya_yolu):
+                close_app_dialog(page, fis_dialog)
+                fis_gorselini_tara_ve_goster(dosya_yolu)
 
-            # Mobilde veya Tkinter açılmazsa Flet modern FilePicker servisini asenkron çağır
-            if not dosya_yolu:
-                try:
-                    picker = ft.FilePicker()
-                    res = picker.pick_files(
-                        dialog_title="Fiş / Fatura Görseli Seçin",
-                        allow_multiple=False,
-                        with_data=True
-                    )
-                    if asyncio.iscoroutine(res):
-                        secilen_dosyalar = await res
-                    else:
-                        secilen_dosyalar = res
+            def sistem_secici_tetikle(ev):
+                close_app_dialog(page, fis_dialog)
+                show_app_snackbar(page, "📂 Dosya seçici açılıyor...", color="#2563eb")
 
-                    if secilen_dosyalar and len(secilen_dosyalar) > 0:
-                        secilen = secilen_dosyalar[0]
-                        p = getattr(secilen, "path", None)
-                        if p and os.path.exists(str(p)):
-                            dosya_yolu = str(p)
-                        elif hasattr(secilen, "bytes") and secilen.bytes:
-                            import tempfile
-                            uzanti = ".jpg"
-                            fname = getattr(secilen, "name", "fis.jpg")
-                            if "." in fname:
-                                uzanti = "." + fname.rsplit(".", 1)[-1]
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=uzanti) as tmp_f:
-                                tmp_f.write(secilen.bytes)
-                                dosya_yolu = tmp_f.name
-                except Exception as err_pick:
-                    print("FilePicker hatası:", err_pick)
-                    bilgi_mesaji.value = f"⚠️ Dosya seçici açılamadı: {str(err_pick)[:40]}"
-                    bilgi_mesaji.color = "#ef4444"
+                # Önce masaüstünde Tkinter dene
+                is_mobile = hasattr(page, "platform") and page.platform in [ft.PagePlatform.ANDROID, ft.PagePlatform.IOS]
+                if not is_mobile and ("ANDROID_ROOT" in os.environ or "ANDROID_DATA" in os.environ):
+                    is_mobile = True
+
+                if not is_mobile:
                     try:
-                        bilgi_mesaji.update()
+                        import tkinter as tk
+                        from tkinter import filedialog
+                        root = tk.Tk()
+                        root.withdraw()
+                        root.attributes("-topmost", True)
+                        dy = filedialog.askopenfilename(
+                            title="Fiş / Fatura Görseli Seçin",
+                            filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
+                        )
+                        root.destroy()
+                        if dy and os.path.exists(dy):
+                            fis_gorselini_tara_ve_goster(dy)
+                            return
                     except Exception:
                         pass
-                    return
 
-            if dosya_yolu and os.path.exists(dosya_yolu):
-                fis_gorselini_tara_ve_goster(dosya_yolu)
-            else:
-                bilgi_mesaji.value = "ℹ️ Fiş seçimi iptal edildi."
-                bilgi_mesaji.color = "#64748b"
-                try:
-                    bilgi_mesaji.update()
-                except Exception:
-                    pass
+                # Mobilde veya Tkinter yoksa Flet FilePicker'ı güvenle çalıştır
+                async def _asenkron_secici():
+                    try:
+                        picker = ft.FilePicker()
+                        if hasattr(page, "services"):
+                            try:
+                                page.services.append(picker)
+                            except Exception:
+                                pass
+                        res = picker.pick_files(
+                            dialog_title="Fiş Görseli Seçin",
+                            allow_multiple=False,
+                            with_data=True
+                        )
+                        if asyncio.iscoroutine(res):
+                            files = await res
+                        else:
+                            files = res
+                        if files and len(files) > 0:
+                            f = files[0]
+                            p = getattr(f, "path", None)
+                            if not p and hasattr(f, "bytes") and f.bytes:
+                                import tempfile
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
+                                    tf.write(f.bytes)
+                                    p = tf.name
+                            if p and os.path.exists(str(p)):
+                                fis_gorselini_tara_ve_goster(str(p))
+                    except Exception as err:
+                        show_app_snackbar(page, f"Seçici hatası: {err}", color="#ef4444")
+
+                if hasattr(page, "run_task"):
+                    page.run_task(_asenkron_secici)
+                else:
+                    import threading
+                    threading.Thread(target=lambda: asyncio.run(_asenkron_secici()), daemon=True).start()
+
+            def metin_coz_tetikle(ev):
+                raw = metin_alani.value.strip()
+                if not raw:
+                    show_app_snackbar(page, "Lütfen fiş veya dekont metni yapıştırın.", color="#ef4444")
+                    return
+                close_app_dialog(page, fis_dialog)
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode="w", encoding="utf-8") as tf:
+                    tf.write(raw)
+                    txt_p = tf.name
+                fis_gorselini_tara_ve_goster(txt_p)
+
+            dialog_icerik = [
+                ft.Text("Fiş tarama yöntemini seçin:", size=12, color="#64748b")
+            ]
+
+            # 1. En Son Çekilen Fotoğraf (Kameradan) - Telefon için EN HIZLI VE KESİN YÖNTEM
+            if son_foto_yolu and os.path.exists(son_foto_yolu):
+                dialog_icerik.append(
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Row([
+                                ft.Icon(ft.Icons.AUTO_AWESOME, color="#f59e0b", size=18),
+                                ft.Text("En Son Fotoğraf Algılandı!", weight=ft.FontWeight.BOLD, size=12, color="#1e293b")
+                            ], spacing=6),
+                            ft.Text(f"📁 {son_foto_adi}", size=11, color="#475569", no_wrap=True),
+                            make_button(
+                                "⚡ Bu Fotoğrafı Oku (1 Tıkla)",
+                                bgcolor="#8b5cf6",
+                                color="white",
+                                height=36,
+                                on_click=lambda _: secilen_yolu_tara(son_foto_yolu)
+                            )
+                        ], spacing=4),
+                        bgcolor="#f5f3ff",
+                        border=make_border_all(1, "#ddd6fe"),
+                        border_radius=10,
+                        padding=10
+                    )
+                )
+
+            # 2. Galeri / Dosya Seçici
+            dialog_icerik.extend([
+                make_button(
+                    "📁 Telefon Galerisinden / Dosyalardan Seç",
+                    icon=ft.Icons.PHOTO_LIBRARY,
+                    bgcolor="#2563eb",
+                    color="white",
+                    height=38,
+                    on_click=sistem_secici_tetikle
+                ),
+                ft.Divider(height=10, color="#e2e8f0"),
+                metin_alani,
+                make_button(
+                    "📝 Yapıştırılan Metni AI ile Çöz",
+                    icon=ft.Icons.TEXT_SNIPPET,
+                    outlined=True,
+                    height=34,
+                    on_click=metin_coz_tetikle
+                )
+            ])
+
+            fis_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.DOCUMENT_SCANNER, color="#8b5cf6", size=24),
+                    ft.Text("📸 Fiş & Fatura Tarama", size=16, weight=ft.FontWeight.BOLD)
+                ], spacing=8),
+                content=ft.Container(
+                    content=ft.Column(dialog_icerik, spacing=8, tight=True),
+                    width=330,
+                    padding=2
+                ),
+                actions=[
+                    make_button("✕ Kapat", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, fis_dialog))
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+
+            show_app_dialog(page, fis_dialog)
 
         async def csv_yukle_tiklandi(e=None):
             bilgi_mesaji.value = "📥 CSV dosyası seçici açılıyor..."
