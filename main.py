@@ -640,14 +640,13 @@ def gemini_aktif_modelleri_bul(api_key, ssl_context=None):
         except Exception as ex:
             print(f"ListModels ({ver}) denemesi:", ex)
 
-    # En güncel, kotası bol ve hızlı Flash modellerini sırala
+    # Gerçek, en güncel ve hızlı Google Gemini Flash modelleri
     oncelik = [
-        "gemini-3.5-flash-lite",
-        "gemini-3.8-flash",
-        "gemini-flash-latest",
         "gemini-2.0-flash",
+        "gemini-1.5-flash",
         "gemini-1.5-flash-latest",
-        "gemini-1.5-flash"
+        "gemini-1.5-flash-8b",
+        "gemini-flash-latest"
     ]
     sirali = []
     for p in oncelik:
@@ -661,10 +660,10 @@ def gemini_aktif_modelleri_bul(api_key, ssl_context=None):
 
     if not sirali:
         sirali = [
-            ("v1beta", "gemini-3.5-flash-lite"),
-            ("v1beta", "gemini-3.8-flash"),
-            ("v1beta", "gemini-flash-latest"),
             ("v1beta", "gemini-2.0-flash"),
+            ("v1beta", "gemini-1.5-flash"),
+            ("v1beta", "gemini-1.5-flash-latest"),
+            ("v1beta", "gemini-flash-latest"),
             ("v1", "gemini-1.5-flash")
         ]
     return sirali
@@ -2553,8 +2552,12 @@ def main(page: ft.Page):
 
             threading.Thread(target=arka_plan_tara, daemon=True).start()
 
-                        # --- %100 HATASIZ VE KESİN FİŞ TARAMA MERKEZİ ---
+        # Fiş analiz motorunu global seçiciye hemen bağla
+        fis_analiz_tetikleyici[0] = fis_gorselini_tara_ve_goster
+
+        # --- %100 HATASIZ VE KESİN FİŞ TARAMA MERKEZİ ---
         def fis_tara_tiklandi(e=None):
+            fis_analiz_tetikleyici[0] = fis_gorselini_tara_ve_goster
             son_fotolar = son_gorselleri_bul(limit=6)
 
             metin_alani = ft.TextField(
@@ -2577,10 +2580,10 @@ def main(page: ft.Page):
                 close_app_dialog(page, fis_dialog)
                 fis_gorselini_tara_ve_goster(dosya_yolu)
 
-            # 1. Galeri / Dosya Seçici Aksiyonu (Hem Mobil Hem Masaüstü)
-            def sistem_galeri_ac(ev=None):
+            # Galeri ve Dosya Seçici Tetikleme (Masaüstünde Doğrudan Tkinter, Mobilde FilePicker)
+            def galeri_tiklandi_aksiyon(ev=None):
                 close_app_dialog(page, fis_dialog)
-                show_app_snackbar(page, "📂 Galeri / Dosya seçici açılıyor...", color="#2563eb")
+                show_app_snackbar(page, "📂 Fiş / Belge seçici açılıyor...", color="#2563eb")
 
                 if not platform_mobil_mi():
                     try:
@@ -2597,40 +2600,38 @@ def main(page: ft.Page):
                         if dy and os.path.exists(dy):
                             fis_gorselini_tara_ve_goster(dy)
                             return
-                    except Exception:
-                        pass
+                    except Exception as ex_tk:
+                        print("Tkinter seçici uyarısı:", ex_tk)
 
-                # Mobilde bağımsız servis olarak FilePicker çağır (overlay OLMADAN)
-                async def _mobil_pick_task():
-                    try:
-                        picker = ft.FilePicker()
-                        res = picker.pick_files(
-                            dialog_title="Fiş Görseli Seçin",
-                            allow_multiple=False,
-                            with_data=True
-                        )
-                        if asyncio.iscoroutine(res):
-                            files = await res
+                # Mobilde hazır galeri_picker servisini tetikle
+                try:
+                    res = galeri_picker.pick_files(
+                        dialog_title="Fiş / Fatura Görseli Seçin",
+                        allow_multiple=False,
+                        with_data=True
+                    )
+                    if asyncio.iscoroutine(res):
+                        async def _await_picker_coro():
+                            try:
+                                files = await res
+                                if files and len(files) > 0:
+                                    f = files[0]
+                                    p = getattr(f, "path", None)
+                                    if not p and hasattr(f, "bytes") and f.bytes:
+                                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
+                                            tf.write(f.bytes)
+                                            p = tf.name
+                                    if p and os.path.exists(str(p)):
+                                        fis_gorselini_tara_ve_goster(str(p))
+                            except Exception as ex_coro:
+                                print("Await picker hatası:", ex_coro)
+
+                        if hasattr(page, "run_task"):
+                            page.run_task(_await_picker_coro)
                         else:
-                            files = res
-                        if files and len(files) > 0:
-                            f = files[0]
-                            p = getattr(f, "path", None)
-                            if not p and hasattr(f, "bytes") and f.bytes:
-                                import tempfile
-                                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                                    tf.write(f.bytes)
-                                    p = tf.name
-                            if p and os.path.exists(str(p)):
-                                fis_gorselini_tara_ve_goster(str(p))
-                    except Exception as ex_p:
-                        show_app_snackbar(page, f"Seçici hatası: {ex_p}", color="#ef4444")
-
-                if hasattr(page, "run_task"):
-                    page.run_task(_mobil_pick_task)
-                else:
-                    import threading
-                    threading.Thread(target=lambda: asyncio.run(_mobil_pick_task()), daemon=True).start()
+                            threading.Thread(target=lambda: asyncio.run(_await_picker_coro()), daemon=True).start()
+                except Exception as ex_pick:
+                    show_app_snackbar(page, f"Seçici hatası: {ex_pick}", color="#ef4444")
 
             def metin_coz_tetikle(ev):
                 raw = metin_alani.value.strip()
@@ -2638,7 +2639,6 @@ def main(page: ft.Page):
                     show_app_snackbar(page, "Lütfen fiş veya dekont metni yapıştırın.", color="#ef4444")
                     return
                 close_app_dialog(page, fis_dialog)
-                import tempfile
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode="w", encoding="utf-8") as tf:
                     tf.write(raw)
                     txt_p = tf.name
@@ -2671,90 +2671,18 @@ def main(page: ft.Page):
                 else:
                     show_app_snackbar(page, "Lütfen geçerli bir anahtar girin.", color="#ef4444")
 
-            dialog_icerik = []
-
-            # Galeri / Dosya Seçici Tetikleme (Masaüstü Tkinter, Mobilde galeri_picker)
-            def galeri_tiklandi_aksiyon(ev=None):
-                close_app_dialog(page, fis_dialog)
-                show_app_snackbar(page, "📂 Galeri / Dosya seçici açılıyor...", color="#2563eb")
-
-                if not platform_mobil_mi():
-                    try:
-                        import tkinter as tk
-                        from tkinter import filedialog
-                        root = tk.Tk()
-                        root.withdraw()
-                        root.attributes("-topmost", True)
-                        dy = filedialog.askopenfilename(
-                            title="Fiş / Fatura Görseli Seçin",
-                            filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
-                        )
-                        root.destroy()
-                        if dy and os.path.exists(dy):
-                            fis_gorselini_tara_ve_goster(dy)
-                            return
-                    except Exception:
-                        pass
-
-                # Mobilde hazır galeri_picker servisini tetikle
-                try:
-                    res = galeri_picker.pick_files(
-                        dialog_title="Fiş / Fatura Görseli Seçin",
-                        allow_multiple=False,
-                        with_data=True
-                    )
-                    if asyncio.iscoroutine(res):
-                        async def _await_picker_coro():
-                            try:
-                                files = await res
-                                if files and len(files) > 0:
-                                    f = files[0]
-                                    p = getattr(f, "path", None)
-                                    if not p and hasattr(f, "bytes") and f.bytes:
-                                        import tempfile
-                                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                                            tf.write(f.bytes)
-                                            p = tf.name
-                                    if p and os.path.exists(str(p)):
-                                        fis_gorselini_tara_ve_goster(str(p))
-                            except Exception as ex_coro:
-                                print("Await picker hatası:", ex_coro)
-
-                        if hasattr(page, "run_task"):
-                            page.run_task(_await_picker_coro)
-                        else:
-                            import threading
-                            threading.Thread(target=lambda: asyncio.run(_await_picker_coro()), daemon=True).start()
-                except Exception as ex_pick:
-                    show_app_snackbar(page, f"Seçici hatası: {ex_pick}", color="#ef4444")
-
-            galeri_sec_btn = None
-            if hasattr(ft, "PickFiles"):
-                try:
-                    galeri_sec_btn = ft.Button(
-                        content=ft.Text("📁 Telefon Galerisinden / Dosyalardan Seç", size=12, weight=ft.FontWeight.BOLD, color="white"),
-                        icon=ft.Icons.PHOTO_LIBRARY,
-                        bgcolor="#2563eb",
-                        height=44,
-                        action=ft.PickFiles(galeri_picker, allow_multiple=False),
-                        on_click=lambda _: close_app_dialog(page, fis_dialog)
-                    )
-                except Exception:
-                    galeri_sec_btn = None
-
-            if galeri_sec_btn is None:
-                galeri_sec_btn = make_button(
-                    "📁 Telefon Galerisinden / Dosyalardan Seç",
+            dialog_icerik = [
+                make_button(
+                    "📁 Bilgisayardan / Galeriden Fiş Seç",
                     icon=ft.Icons.PHOTO_LIBRARY,
                     bgcolor="#2563eb",
                     color="white",
                     height=44,
                     on_click=galeri_tiklandi_aksiyon
                 )
+            ]
 
-            dialog_icerik.append(galeri_sec_btn)
-
-            # Eğer anahtar kayıtlı değilse uyarı kutusu göster
+            # Eğer anahtar kayıtlı değilse uyarı ve giriş kutusu göster
             if not aktif_key:
                 dialog_icerik.append(
                     ft.Container(
@@ -2776,7 +2704,7 @@ def main(page: ft.Page):
 
             dialog_icerik.append(ft.Divider(height=10, color="#e2e8f0"))
 
-            # 2. Telefon Galerisindeki Son Fotoğraflar (Kameradan)
+            # Telefon Galerisindeki / Bilgisayardaki Son Fotoğraflar
             if son_fotolar:
                 foto_kartlari = []
                 for foto in son_fotolar:
@@ -2803,7 +2731,7 @@ def main(page: ft.Page):
                     ft.Column([
                         ft.Row([
                             ft.Icon(ft.Icons.AUTO_AWESOME, color="#f59e0b", size=16),
-                            ft.Text("Algılanan Son Kamera Fotoğrafları:", weight=ft.FontWeight.BOLD, size=12, color="#1e293b")
+                            ft.Text("Algılanan Son Fiş Fotoğrafları:", weight=ft.FontWeight.BOLD, size=12, color="#1e293b")
                         ], spacing=4),
                         *foto_kartlari
                     ], spacing=4)
@@ -2829,27 +2757,25 @@ def main(page: ft.Page):
                     on_click=manuel_yol_tara
                 ),
                 ft.Divider(height=10, color="#e2e8f0"),
-                ft.Text("🔑 API Anahtarı Ayarı (Cihazda Saklanır):", size=10, color="#64748b"),
                 api_key_tf,
-                make_button("💾 Anahtarı Güncelle", outlined=True, height=30, on_click=api_keyi_kaydet_aksiyon)
+                make_button("🔑 API Anahtarını Güncelle", outlined=True, height=32, on_click=api_keyi_kaydet_aksiyon)
             ])
 
             fis_dialog = ft.AlertDialog(
                 title=ft.Row([
-                    ft.Icon(ft.Icons.DOCUMENT_SCANNER, color="#8b5cf6", size=24),
-                    ft.Text("📸 Fiş & Fatura Tarama", size=16, weight=ft.FontWeight.BOLD)
+                    ft.Icon(ft.Icons.DOCUMENT_SCANNER, color="#2563eb", size=24),
+                    ft.Text("AI Fiş / Fatura Tara", size=16, weight=ft.FontWeight.BOLD)
                 ], spacing=8),
                 content=ft.Container(
                     content=ft.Column(dialog_icerik, spacing=8, scroll=ft.ScrollMode.AUTO),
                     width=330,
-                    height=420,
+                    height=360,
                     padding=2
                 ),
                 actions=[
-                    make_button("🔄 Yenile", height=32, outlined=True, on_click=lambda _: [close_app_dialog(page, fis_dialog), fis_tara_tiklandi()]),
                     make_button("✕ Kapat", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, fis_dialog))
                 ],
-                actions_alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                actions_alignment=ft.MainAxisAlignment.END
             )
 
             show_app_dialog(page, fis_dialog)
@@ -4314,14 +4240,14 @@ def main(page: ft.Page):
         )
 
 
-        # --- DOĞAL DİL / SÖZEL İŞLEM EKLEME ÇUBUĞU ---
+        # --- DOĞAL DİL / SÖZEL İŞLEM EKLEME ÇUBUĞU (GEMINI.COM KALİTESİNDE) ---
         def sozel_islem_calistir(ev=None):
             cumle = sozel_input.value.strip()
             if not cumle:
                 show_app_snackbar(page, "Lütfen bir ifade yazın (Örn: bimden 14.21 de 3 ekmek alındı)", color="#ef4444")
                 return
 
-            bilgi_mesaji.value = "🤖 Yapay zeka ifadeyi çözümlüyor..."
+            bilgi_mesaji.value = "🤖 Gemini AI ifadeyi analiz ediyor..."
             bilgi_mesaji.color = "#8b5cf6"
             try:
                 bilgi_mesaji.update()
@@ -4333,33 +4259,46 @@ def main(page: ft.Page):
                 api_key = gemini_api_key_al()
                 sonuc = None
 
-                # Gemini AI ile gelişmiş doğal dil analizi dene
+                # 1. Gemini AI ile profesyonel doğal dil analizi
                 if api_key:
-                    try:
-                        hafiza_satirlari = [f"- {v['firma']} | {v['urun']} | Birim Fiyat: {v['birim_fiyat']} TL | Kategori: {v['kategori']}" for v in list(hafiza.values())[:35]]
-                        hafiza_metni = "\n".join(hafiza_satirlari)
-                        su_an = datetime.datetime.now()
-                        bugun_str = su_an.strftime("%d.%m.%Y")
-                        saat_str = su_an.strftime("%H:%M")
+                    hafiza_satirlari = [f"- {v['firma']} | {v['urun']} | Birim Fiyat: {v['birim_fiyat']} TL | Kategori: {v['kategori']}" for v in list(hafiza.values())[:45]]
+                    hafiza_metni = "\n".join(hafiza_satirlari)
+                    su_an = datetime.datetime.now()
+                    bugun_str = su_an.strftime("%d.%m.%Y")
+                    saat_str = su_an.strftime("%H:%M")
 
-                        prompt = f"""Kullanıcının harcama veya gelir ifadesini analiz et.
-Cümle: "{cumle}"
-Bugünün Tarihi: {bugun_str}
-Varsayılan Saat: {saat_str}
+                    prompt = f"""Sen profesyonel bir kişisel finans ve bütçe asistanısın. Kullanıcının doğal Türkçe harcama, gelir veya para transferi cümlesini analiz et.
 
-Kullanıcının Geçmiş Bütçe Fiyat Hafızası:
+KULLANICI CÜMLESİ:
+"{cumle}"
+
+BAĞLAM:
+- Bugünün Tarihi: {bugun_str}
+- Şimdiki Saat: {saat_str}
+- Kullanıcının Geçmiş Bütçe Fiyat Hafızası:
 {hafiza_metni}
 
-KURALLAR:
-1. İşlem türü: 'Gider', 'Gelir' veya 'Para Aktarımı'.
-2. Firma/Kurum adı (örn: 'BİM', 'A101', 'Migros', 'Nakit').
-3. Ürün adı (örn: 'EKMEK TEKLİ', 'Süt').
-4. Varsa cümleden saat (örn: '14.21' -> '14:21') ve tarihi çıkar; yoksa varsayılanları kullan.
-5. Miktar (örn: '3 adet', '2 kg').
-6. FİYAT BELİRTİLMEDİYSE: Fiyat Hafızasından o firmanın ürününün birim fiyatını hatırla (Örn: BİM Ekmek = 11.00 TL). Miktar ile çarpıp toplam tutarı hesapla (3 x 11.00 = 33.00 TL).
-7. Kategori ata: 'Market & Temel Gıda', 'Abur Cubur & Atıştırmalık', 'Ev & Faturalar', 'Dışarıda Yemek / Eğlence', 'Giyim', 'Sağlık & Bakım', 'Ulaşım & Yakıt', 'Eğitim & Okul', 'Sigara/Tütün', 'Diğer'.
+ANALİZ VE ÇIKARIM KURALLARI:
+1. İŞLEM TÜRÜ (tur):
+   - 'Gider': Alışveriş, harcama, market, fatura, benzin, ödeme vb.
+   - 'Gelir': Maaş, ek ders, harçlık alma, hediye para vb.
+   - 'Para Aktarımı': Bir aile üyesine nakit verme, IBAN'dan para gönderme vb.
+2. FİRMA / KURUM (firma veya kaynak):
+   - Harcamada satıcı/market adı (Örn: 'BİM', 'A101', 'Migros', 'Shell', 'Eczane', 'Nakit').
+   - Belirtilmemişse 'Market' veya 'Diğer' yaz.
+3. ÜRÜN / HİZMET (urun veya aciklama):
+   - Kullanıcının aldığı ürün veya yapılan harcamanın net adı (Örn: 'EKMEK TEKLİ', 'Süt', 'Benzin', 'Öğretmen Maaşı').
+   - ASLA kullanıcının cümlesinde bahsetmediği alakasız ürünler uydurma!
+4. MİKTAR (miktar):
+   - Cümlede miktar varsa (Örn: '3 adet', '1.5 kg', '2 paket', '40 litre') yaz, yoksa '1 adet'.
+5. FİYAT VE TUTAR:
+   - Eğer kullanıcı tutarı doğrudan söylediyse (Örn: '850 TL benzin', '50 liraya tost'): bu tutarı kullan.
+   - Eğer kullanıcı sadece miktar söylediyse ve fiyat belirtmediyse (Örn: '3 ekmek alındı'): Geçmiş Fiyat Hafızasındaki o firmanın birim fiyatını kullan (Örn: BİM Ekmek = 11,00 TL). Tutarı = miktar x birim_fiyat olarak hesapla (3 x 11,00 = 33,00 TL).
+6. KATEGORİ:
+   - Standart bütçe kategorilerinden en uygununu seç: 'Market & Temel Gıda', 'Abur Cubur & Atıştırmalık', 'Ev & Faturalar', 'Dışarıda Yemek / Eğlence', 'Eğitim & Okul', 'Ulaşım & Yakıt', 'Sağlık & Bakım', 'Giyim', 'Sigara/Tütün', 'Aile / Harçlık', 'Maaş', 'Ödenek', 'Ek Ders', 'Devir / Nakit', 'Transfer / Birikim', 'Diğer'.
 
-Yalnızca saf JSON nesnesi döndür:
+ÇIKTI FORMATI:
+Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekleme, doğrudan json döndür):
 {{
   "tur": "Gider",
   "firma": "BİM",
@@ -4368,48 +4307,72 @@ Yalnızca saf JSON nesnesi döndür:
   "birim_fiyat": "11,00",
   "tutar": 33.00,
   "tarih": "{bugun_str}",
-  "saat": "14:21",
+  "saat": "{saat_str}",
   "kategori": "Market & Temel Gıda"
 }}"""
-                        import urllib.request, ssl
+
+                    ssl_ctx = None
+                    try:
                         ssl_ctx = ssl.create_default_context()
                         ssl_ctx.check_hostname = False
                         ssl_ctx.verify_mode = ssl.CERT_NONE
-                        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-                        payload = {
-                            "contents": [{"parts": [{"text": prompt}]}],
-                            "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"}
-                        }
-                        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"x-goog-api-key": api_key, "Content-Type": "application/json"})
-                        with urllib.request.urlopen(req, timeout=8, context=ssl_ctx) as resp:
-                            res_data = json.loads(resp.read().decode("utf-8"))
-                            cands = res_data.get("candidates", [])
-                            if cands:
-                                txt = cands[0]["content"]["parts"][0]["text"].strip()
-                                if txt.startswith("```json"): txt = txt[7:]
-                                if txt.startswith("```"): txt = txt[3:]
-                                if txt.endswith("```"): txt = txt[:-3]
-                                sonuc = json.loads(txt.strip())
-                    except Exception as ex_g:
-                        print("Gemini sözel hata, yerel ayrıştırıcı devrede:", ex_g)
-                        sonuc = None
+                    except Exception:
+                        pass
 
-                # Yedek / Çevrimdışı Akıllı Ayrıştırıcı
+                    # Gerçek ve çalışan Google Gemini modelleri cascade sırası
+                    denenecek_modeller = [
+                        ("v1beta", "gemini-2.0-flash"),
+                        ("v1beta", "gemini-1.5-flash"),
+                        ("v1beta", "gemini-1.5-flash-latest"),
+                        ("v1", "gemini-1.5-flash")
+                    ]
+
+                    for api_ver, model_name in denenecek_modeller:
+                        try:
+                            url = f"https://generativelanguage.googleapis.com/{api_ver}/models/{model_name}:generateContent"
+                            payload = {
+                                "contents": [{"parts": [{"text": prompt}]}],
+                                "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}
+                            }
+                            req = urllib.request.Request(
+                                url,
+                                data=json.dumps(payload).encode("utf-8"),
+                                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"}
+                            )
+                            kw = {"timeout": 12}
+                            if ssl_ctx:
+                                kw["context"] = ssl_ctx
+                            with urllib.request.urlopen(req, **kw) as resp:
+                                res_data = json.loads(resp.read().decode("utf-8"))
+                                cands = res_data.get("candidates", [])
+                                if cands:
+                                    txt = cands[0]["content"]["parts"][0]["text"].strip()
+                                    if txt.startswith("```json"): txt = txt[7:]
+                                    if txt.startswith("```"): txt = txt[3:]
+                                    if txt.endswith("```"): txt = txt[:-3]
+                                    sonuc = json.loads(txt.strip())
+                                    if sonuc and "tutar" in sonuc:
+                                        print(f"✅ Gemini AI sözel analiz başarılı ({model_name}): {sonuc}")
+                                        break
+                        except Exception as ex_m:
+                            print(f"Gemini sözel model denemesi ({model_name}) hatası:", ex_m)
+                            continue
+
+                # 2. Yedek / Çevrimdışı Akıllı Ayrıştırıcı
                 if not sonuc:
                     sonuc = parse_sozel_ifade_yerel(cumle, hafiza)
 
                 if sonuc:
-                    # Kayıt oluştur ve sisteme ekle
                     yeni_islem = {
                         "kullanici": kullanici or "Ev Yöneticisi",
                         "tur": sonuc.get("tur", "Gider"),
                         "tarih": sonuc.get("tarih") or datetime.date.today().strftime("%d.%m.%Y"),
                         "saat": sonuc.get("saat") or datetime.datetime.now().strftime("%H:%M"),
-                        "kaynak": "",
-                        "gelir_turu": "",
+                        "kaynak": sonuc.get("kaynak", "") if sonuc.get("tur") in ["Gelir", "Para Aktarımı"] else "",
+                        "gelir_turu": sonuc.get("kategori", "") if sonuc.get("tur") == "Gelir" else "",
                         "aciklama": f"Sözel: {cumle}",
-                        "firma": sonuc.get("firma", "Bilinmeyen"),
-                        "urun": sonuc.get("urun", "Ürün"),
+                        "firma": sonuc.get("firma", "Diğer") if sonuc.get("tur") == "Gider" else "",
+                        "urun": sonuc.get("urun", "Genel Harcama") if sonuc.get("tur") == "Gider" else "",
                         "kategori": sonuc.get("kategori", "Diğer"),
                         "miktar": sonuc.get("miktar", "1 adet"),
                         "birim_fiyat": str(sonuc.get("birim_fiyat", "")),
@@ -4428,13 +4391,24 @@ Yalnızca saf JSON nesnesi döndür:
                         mevcut_idler = [it.get("id") for it in islemler if isinstance(it.get("id"), int)]
                         yeni_islem["id"] = (max(mevcut_idler) + 1) if mevcut_idler else 1
 
-                    islemler.append(yeni_islem)
+                    islemler.insert(0, yeni_islem)
                     sozel_input.value = ""
                     arayuzu_guncelle()
-                    
+                    try:
+                        liste_arayuzu.update()
+                    except Exception:
+                        pass
+
                     tutar_str = format_turk_para(yeni_islem["tutar"])
                     birim_str = yeni_islem.get("birim_fiyat", "")
-                    msg = f"✨ Eklendi: {yeni_islem['firma']} - {yeni_islem['urun']} ({yeni_islem['miktar']} x {birim_str} TL = {tutar_str} TL)"
+                    firma_gosterim = yeni_islem.get("firma") or yeni_islem.get("kaynak") or "İşlem"
+                    urun_gosterim = yeni_islem.get("urun") or yeni_islem.get("gelir_turu") or ""
+
+                    if birim_str and birim_str != "-":
+                        msg = f"✨ Eklendi: {firma_gosterim} - {urun_gosterim} ({yeni_islem['miktar']} x {birim_str} TL = {tutar_str} TL)"
+                    else:
+                        msg = f"✨ Eklendi: {firma_gosterim} - {urun_gosterim} ({tutar_str} TL)"
+
                     show_app_snackbar(page, msg, color="#10b981")
                     bilgi_mesaji.value = msg
                     bilgi_mesaji.color = "green"
