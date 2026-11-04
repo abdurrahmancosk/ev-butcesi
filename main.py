@@ -1624,9 +1624,18 @@ def main(page: ft.Page):
 
         fiyat_satiri = ft.Row([gider_birim_fiyat, gider_toplam_tutar], alignment=ft.MainAxisAlignment.CENTER)
 
+        gider_hesap_secimi = make_dropdown(
+            label="Harcayan Hesap (Nereden Düşsün?)",
+            options=["👑 Ev Yöneticisi (Ana Kasa)", "👤 Aile Üyesi (Üye Cüzdanı)"],
+            value="👑 Ev Yöneticisi (Ana Kasa)" if yonetici_mi else "👤 Aile Üyesi (Üye Cüzdanı)",
+            width=320,
+            dense=True
+        )
+
         gider_form_kutusu = ft.Column([
             ft.Text("Tarih ve Saat:", size=12, color="grey"),
             gider_tarih_saat_satiri,
+            gider_hesap_secimi,
             gider_firma,
             gider_urun,
             gider_kategori,
@@ -3253,6 +3262,13 @@ def main(page: ft.Page):
             duzenle_tutar = ft.TextField(label="Tutar (TL)", value=str(item.get("tutar", 0.0)), width=310, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
 
             if tur == "Gider":
+                duzenle_hesap = make_dropdown(
+                    options=["Ev Yöneticisi", "Aile Üyesi"],
+                    value=item.get("kullanici") or "Ev Yöneticisi",
+                    label="Harcayan Hesap (Kasa / Üye)",
+                    width=310,
+                    dense=True
+                )
                 duzenle_firma = ft.TextField(label="Firma / Market", value=item.get("firma", ""), width=310, dense=True)
                 duzenle_urun = ft.TextField(label="Ürün / Hizmet", value=item.get("urun", ""), width=310, dense=True)
                 duzenle_kat = make_dropdown(options=kat_secenekleri, value=mevcut_kat, label="Kategori", width=310, dense=True)
@@ -3260,6 +3276,7 @@ def main(page: ft.Page):
                 duzenle_birim_fiyat = ft.TextField(label="Birim Fiyat (TL)", value=str(item.get("birim_fiyat", 0.0)), width=150, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
 
                 form_kontrolleri = [
+                    duzenle_hesap,
                     duzenle_firma,
                     duzenle_urun,
                     duzenle_kat,
@@ -3308,6 +3325,7 @@ def main(page: ft.Page):
                 item["saat"] = yeni_saat
 
                 if tur == "Gider":
+                    item["kullanici"] = duzenle_hesap.value
                     item["firma"] = duzenle_firma.value.strip()
                     item["urun"] = duzenle_urun.value.strip()
                     item["kategori"] = duzenle_kat.value or "Diğer"
@@ -3354,32 +3372,40 @@ def main(page: ft.Page):
             liste_arayuzu.controls.clear()
 
             # 1. TÜM ZAMANLAR KÜMÜLATİF BAKİYE (Eldeki Gerçek Toplam Nakit / Kasa)
+            # Kural: Harcama Aile Üyesi hesabından kaydedilirse o üyenin hesabından düşer; aksi durumda (Ev Yöneticisi) toplam kasadan düşer.
             genel_gelir = 0.0
-            genel_gider = 0.0
+            kasa_harcamalari = 0.0
             genel_kullanici_harcamalari = {}
             genel_kullaniciya_aktarilan = {}
 
             for item in islemler:
                 t = float(item.get("tutar") or 0.0)
                 tur = item.get("tur")
-                sahip = item.get("kullanici") or "Bilinmeyen"
+                sahip = (item.get("kullanici") or "Ev Yöneticisi").strip()
 
                 if tur == "Gelir":
                     genel_gelir += t
-                elif tur == "Gider":
-                    genel_gider += t
-                    genel_kullanici_harcamalari[sahip] = genel_kullanici_harcamalari.get(sahip, 0.0) + t
                 elif tur == "Para Aktarımı":
                     alici = item.get("kaynak") or "Aile Üyesi"
                     genel_kullaniciya_aktarilan[alici] = genel_kullaniciya_aktarilan.get(alici, 0.0) + t
+                elif tur == "Gider":
+                    if sahip != "Ev Yöneticisi":
+                        genel_kullanici_harcamalari[sahip] = genel_kullanici_harcamalari.get(sahip, 0.0) + t
+                    else:
+                        kasa_harcamalari += t
 
-            genel_kasa = genel_gelir - genel_gider
+            # Kasadan üyelere aktarılan toplam tutar
+            toplam_uyelere_aktarilan = sum(genel_kullaniciya_aktarilan.values())
+
+            # Toplam Kasada Kalan Net Para:
+            genel_kasa = genel_gelir - kasa_harcamalari - toplam_uyelere_aktarilan
 
             # 2. SEÇİLİ DÖNEM HESAPLAMASI (O Ayın Gelir ve Gideri)
             donem_gelir = 0.0
-            donem_gider = 0.0
+            donem_kasa_harcamasi = 0.0
             donem_kullanici_harcamalari = {}
             donem_kullaniciya_aktarilan = {}
+            donem_toplam_harcama = 0.0
 
             # Dönem başlığı güncellemesi (Kompakt ve Şık Format)
             bas_kisa = secilen_donem_bas[0].strftime("%d.%m")
@@ -3411,13 +3437,16 @@ def main(page: ft.Page):
                 if islem_turu_val == "Gelir":
                     donem_gelir += tutar
                     toplam_donem_gelir_sayisi += 1
-                elif islem_turu_val == "Gider":
-                    donem_gider += tutar
-                    toplam_donem_gider_sayisi += 1
-                    donem_kullanici_harcamalari[islem_sahibi] = donem_kullanici_harcamalari.get(islem_sahibi, 0.0) + tutar
                 elif islem_turu_val == "Para Aktarımı":
                     alici = item.get("kaynak") or "Aile Üyesi"
                     donem_kullaniciya_aktarilan[alici] = donem_kullaniciya_aktarilan.get(alici, 0.0) + tutar
+                elif islem_turu_val == "Gider":
+                    donem_toplam_harcama += tutar
+                    toplam_donem_gider_sayisi += 1
+                    if islem_sahibi != "Ev Yöneticisi":
+                        donem_kullanici_harcamalari[islem_sahibi] = donem_kullanici_harcamalari.get(islem_sahibi, 0.0) + tutar
+                    else:
+                        donem_kasa_harcamasi += tutar
 
                 # 1. Tür Filtresi Kontrolü (Tümü / Gelir / Gider)
                 if secilen_filtre[0] == "Gelir" and islem_turu_val != "Gelir":
@@ -3483,7 +3512,8 @@ def main(page: ft.Page):
                     miktar_bilgisi = item.get("miktar") or ""
                     miktar_eki = f" • {miktar_bilgisi}" if (miktar_bilgisi and miktar_bilgisi != "-") else ""
                     kat_eki = f" • {item.get('kategori')}" if item.get('kategori') else ''
-                    alt_detay = f"{zaman_metni}{kat_eki}{miktar_eki}"
+                    sahip_eki = f" • 👤 {islem_sahibi}" if islem_sahibi != "Ev Yöneticisi" else " • 👑 Kasa"
+                    alt_detay = f"{zaman_metni}{kat_eki}{miktar_eki}{sahip_eki}"
                     tutar_metni = f"-{tutar:,.2f} TL"
                     tutar_rengi = "#ef4444"
                     ikon_adi = ft.Icons.ARROW_DOWNWARD
@@ -3560,12 +3590,15 @@ def main(page: ft.Page):
 
             if yonetici_mi:
                 uye_bakiye_metinleri = []
-                for u in ["Aile Üyesi", "Ahmet", "Ayşe"]:
+                # Aktarım yapılan veya harcama yapan tüm üyeleri topla
+                tum_uyeler = set(list(genel_kullaniciya_aktarilan.keys()) + list(genel_kullanici_harcamalari.keys()))
+                for u in sorted(tum_uyeler):
+                    if u == "Ev Yöneticisi":
+                        continue
                     aktarilan = genel_kullaniciya_aktarilan.get(u, 0.0)
                     harcanan = genel_kullanici_harcamalari.get(u, 0.0)
                     kalan = aktarilan - harcanan
-                    if aktarilan > 0 or harcanan > 0:
-                        uye_bakiye_metinleri.append(f"{u}: {kalan:,.2f} TL")
+                    uye_bakiye_metinleri.append(f"{u}: {kalan:,.2f} TL (Harcama: {harcanan:,.2f} TL)")
 
                 detay_str = " | ".join(uye_bakiye_metinleri) if uye_bakiye_metinleri else ""
 
@@ -3573,8 +3606,11 @@ def main(page: ft.Page):
                 kasa_tutar_metni.value = f"{genel_kasa:,.2f} TL"
                 kasa_tutar_metni.color = "white"
 
+                donem_kasa_cikisi = donem_kasa_harcamasi + sum(donem_kullaniciya_aktarilan.values())
+                donem_fark = donem_gelir - donem_kasa_cikisi
+
                 bu_ay_gelir_txt.value = f"+{donem_gelir:,.2f} TL"
-                bu_ay_gider_txt.value = f"-{donem_gider:,.2f} TL"
+                bu_ay_gider_txt.value = f"-{donem_kasa_harcamasi:,.2f} TL"
                 bu_ay_fark_txt.value = f"{donem_fark:+,.2f} TL"
                 bu_ay_fark_txt.color = "#10b981" if donem_fark >= 0 else "#f87171"
 
@@ -3585,16 +3621,17 @@ def main(page: ft.Page):
                 benim_harcanan = genel_kullanici_harcamalari.get(kullanici, 0.0)
                 benim_kalan = benim_aktarilan - benim_harcanan
                 bu_donem_harcanan = donem_kullanici_harcamalari.get(kullanici, 0.0)
+                bu_donem_aktarilan = donem_kullaniciya_aktarilan.get(kullanici, 0.0)
 
-                kasa_baslik_metni.value = "KİŞİSEL CÜZDANINIZ (KALAN)"
+                kasa_baslik_metni.value = f"{kullanici.upper()} CÜZDANI (KALAN)"
                 kasa_tutar_metni.value = f"{benim_kalan:,.2f} TL"
                 kasa_tutar_metni.color = "white"
 
-                bu_ay_gelir_txt.value = f"+{benim_aktarilan:,.2f} TL"
+                bu_ay_gelir_txt.value = f"+{bu_donem_aktarilan:,.2f} TL"
                 bu_ay_gider_txt.value = f"-{bu_donem_harcanan:,.2f} TL"
-                bu_ay_fark_txt.value = f"-{benim_harcanan:,.2f} TL"
+                bu_ay_fark_txt.value = f"{benim_kalan:+,.2f} TL"
 
-                uye_cuzdan_metni.value = f"Toplam Harcamanız: {benim_harcanan:,.2f} TL"
+                uye_cuzdan_metni.value = f"Toplam Harcamanız: {benim_harcanan:,.2f} TL / Kalan: {benim_kalan:,.2f} TL"
                 uye_cuzdan_metni.visible = True
 
             # Kategori Özet Rozetini Güncelle
@@ -3782,8 +3819,10 @@ def main(page: ft.Page):
 
                 miktar_tam_metin = f"{miktar_str} {birim_val}".strip() if miktar_str else ""
 
+                secilen_hesap = "Aile Üyesi" if "Aile Üyesi" in (gider_hesap_secimi.value or "") else "Ev Yöneticisi"
+
                 yeni_kayit = {
-                    "kullanici": kullanici,
+                    "kullanici": secilen_hesap,
                     "tur": "Gider",
                     "tarih": secilen_gider_tarih[0].strftime("%d.%m.%Y"),
                     "saat": secilen_gider_saat[0],
