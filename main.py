@@ -287,18 +287,131 @@ def oturum_sil():
             pass
 
 # ==============================================================================
-# Supabase Bulut Veritabanı Bağlantısı
+# Supabase Bulut Veritabanı Bağlantısı (Evrensel Sıfır-Bağımlılık REST İstemcisi)
 # ==============================================================================
 SUPABASE_URL = "https://ivngkowxxafkyvvzhdob.supabase.co"
 SUPABASE_KEY = "sb_publishable_0pVRLE1ceJ0FlI32XGzbsw_Z_mldcXe"
+
+class _SupabaseQueryBuilder:
+    def __init__(self, client, table):
+        self.client = client
+        self.table = table
+        self.action = "select"
+        self.params = {}
+        self.filters = []
+        self.data_payload = None
+
+    def select(self, columns="*"):
+        self.action = "select"
+        self.params["select"] = columns
+        return self
+
+    def order(self, column, desc=False):
+        direction = "desc" if desc else "asc"
+        self.params["order"] = f"{column}.{direction}"
+        return self
+
+    def limit(self, count):
+        self.params["limit"] = str(count)
+        return self
+
+    def eq(self, column, value):
+        self.filters.append((column, f"eq.{value}"))
+        return self
+
+    def in_(self, column, values):
+        val_str = "(" + ",".join([str(v) for v in values]) + ")"
+        self.filters.append((column, f"in.{val_str}"))
+        return self
+
+    def insert(self, data):
+        self.action = "insert"
+        self.data_payload = data if isinstance(data, list) else [data]
+        return self
+
+    def update(self, data):
+        self.action = "update"
+        self.data_payload = data
+        return self
+
+    def delete(self):
+        self.action = "delete"
+        return self
+
+    def execute(self):
+        import urllib.request
+        import urllib.parse
+        import json
+        import types
+        import ssl
+
+        res = types.SimpleNamespace(data=None)
+        query_parts = [f"{k}={urllib.parse.quote(str(v))}" for k, v in self.params.items()]
+        for col, flt in self.filters:
+            query_parts.append(f"{urllib.parse.quote(col)}={urllib.parse.quote(flt)}")
+        query_str = ("?" + "&".join(query_parts)) if query_parts else ""
+
+        url = f"{self.client.base_url}/{self.table}{query_str}"
+        method = "GET"
+        body = None
+
+        if self.action == "insert":
+            method = "POST"
+            body = json.dumps(self.data_payload).encode("utf-8")
+        elif self.action == "update":
+            method = "PATCH"
+            body = json.dumps(self.data_payload).encode("utf-8")
+        elif self.action == "delete":
+            method = "DELETE"
+
+        req = urllib.request.Request(url, data=body, headers=self.client.headers, method=method)
+
+        ssl_ctx = None
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+        except Exception:
+            pass
+
+        try:
+            kw = {"timeout": 15}
+            if ssl_ctx:
+                kw["context"] = ssl_ctx
+            with urllib.request.urlopen(req, **kw) as resp:
+                resp_bytes = resp.read()
+                if resp_bytes:
+                    res.data = json.loads(resp_bytes.decode("utf-8"))
+                else:
+                    res.data = []
+        except Exception as e:
+            print(f"Supabase REST hatası ({self.action} on {self.table}):", e)
+            res.data = None
+        return res
+
+class SupabaseRestClient:
+    def __init__(self, url, key):
+        self.base_url = url.rstrip('/') + "/rest/v1"
+        self.key = key
+        self.headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+        }
+
+    def table(self, table_name):
+        return _SupabaseQueryBuilder(self, table_name)
 
 supabase = None
 try:
     from supabase import create_client
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    print("✅ Supabase bulut veritabanına başarıyla bağlanıldı.")
-except Exception as e:
-    print("⚠️ Supabase bağlantısı başlatılamadı (yerel modda çalışılacak):", e)
+    print("✅ Supabase istemcisi başarıyla bağlandı.")
+except Exception:
+    # Android'de veya kütüphane eksikse saf REST istemcisini devreye sok
+    supabase = SupabaseRestClient(SUPABASE_URL, SUPABASE_KEY)
+    print("✅ Supabase REST bulut köprüsü başarıyla aktif edildi.")
 
 
 # ==============================================================================
@@ -598,6 +711,7 @@ def main(page: ft.Page):
     page.title = "Hane Bütçesi Takip Sistemi"
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.scroll = ft.ScrollMode.AUTO
+    page.bgcolor = "#f8fafc"
 
     try:
         if hasattr(page, "window"):
@@ -630,6 +744,7 @@ def main(page: ft.Page):
     def ana_ekrana_git(kullanici, yonetici_mi):
         page.clean()
         page.scroll = ft.ScrollMode.AUTO
+        page.bgcolor = "#f8fafc"
 
         # Aktif Bütçe Dönemi Durumu
         varsayilan_bas, varsayilan_bit = aktif_butce_donemini_bul()
@@ -638,13 +753,24 @@ def main(page: ft.Page):
         tum_zamanlar_modu = [False]
         siralama_en_yeni = [False]  # False = Kronolojik (Eskiden yeniye)
 
-        # Buluttan mevcut kayıtları çek
+        # Buluttan mevcut kayıtları çek (ve dönemi en güncel veriye otomatik ayarla)
         if supabase:
             try:
-                res = supabase.table("islemler").select("*").order("id", desc=True).execute()
+                res = supabase.table("islemler").select("*").order("id", desc=True).limit(2000).execute()
                 if res.data is not None:
                     islemler.clear()
                     islemler.extend(res.data)
+                    # Eğer veri geldiyse ve mevcut bütçe döneminde kayıt yoksa, dönemi en güncel verinin ayına taşı
+                    en_yeni_tarih = None
+                    for it in islemler:
+                        dt = stringden_tarih_al(it.get("tarih"))
+                        if dt:
+                            if not en_yeni_tarih or dt > en_yeni_tarih:
+                                en_yeni_tarih = dt
+                    if en_yeni_tarih:
+                        p_bas, p_bit = aktif_butce_donemini_bul(en_yeni_tarih)
+                        secilen_donem_bas[0] = p_bas
+                        secilen_donem_bit[0] = p_bit
             except Exception as ex:
                 print("Buluttan veri çekme hatası:", ex)
 
@@ -1074,7 +1200,7 @@ def main(page: ft.Page):
             bgcolor="#0f172a",
             border_radius=16,
             padding=16,
-            width=360,
+            width=355,
         )
 
         bakiye_metni = ft.Text("", visible=False)
@@ -1214,7 +1340,7 @@ def main(page: ft.Page):
             padding=make_padding(10, 5),
             visible=False,
             alignment=get_alignment_center(),
-            width=360
+            width=355
         )
 
         # --- AÇILIR / KAPANIR İŞLEM EKLEME FORMU ---
@@ -1249,7 +1375,7 @@ def main(page: ft.Page):
             border_radius=12,
             border=make_border_all(1, "#e2e8f0"),
             padding=10,
-            width=360
+            width=355
         )
 
         # --- ONAYLI İŞLEM SİLME ---
@@ -1886,144 +2012,262 @@ def main(page: ft.Page):
 
             threading.Thread(target=arka_plan_tara, daemon=True).start()
 
-        # Android & Mobil için FilePicker Tanımı
-        def mobil_dosya_secildi(e):
-            if e.files and len(e.files) > 0:
-                secilen_dosya = e.files[0].path
-                if secilen_dosya:
-                    fis_gorselini_tara_ve_goster(secilen_dosya)
-
-        mobil_file_picker = ft.FilePicker(on_result=mobil_dosya_secildi)
-        if hasattr(page, "services"):
+        # --- MODERN ASENKRON DOSYA VE FİŞ SEÇİCİ İŞLEYİCİLERİ (FLET 1.0 VE TÜM PLATFORMLAR) ---
+        async def fis_tara_tiklandi(e=None):
+            bilgi_mesaji.value = "📸 Fiş seçici açılıyor..."
+            bilgi_mesaji.color = "#2563eb"
             try:
-                page.services.append(mobil_file_picker)
+                bilgi_mesaji.update()
             except Exception:
                 pass
 
-        def fis_tara_tiklandi(e):
-            # 1. Önce mobil / Android ortamı kontrol et (tkinter yoksa FilePicker aç)
-            mobil_mi = False
-            try:
-                import tkinter as tk
-                from tkinter import filedialog
-            except Exception:
-                mobil_mi = True
-
-            if mobil_mi:
-                try:
-                    mobil_file_picker.pick_files(
-                        dialog_title="Fiş / Fatura Fotoğrafı Seçin",
-                        allow_multiple=False
-                    )
-                    return
-                except Exception as ex_mob:
-                    print("Mobil dosya seçici hatası:", ex_mob)
-
-            # 2. Masaüstü (Windows / Mac) ortamı için Tkinter dosya seçici
             dosya_yolu = None
-            try:
-                import tkinter as tk
-                from tkinter import filedialog
-                root = tk.Tk()
-                root.withdraw()
-                root.attributes("-topmost", True)
-                dosya_yolu = filedialog.askopenfilename(
-                    title="Fiş / Fatura Görseli veya PDF Seçin",
-                    filetypes=[
-                        ("Fiş ve Fatura Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"),
-                        ("PDF Faturalar", "*.pdf"),
-                        ("Resim Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic"),
-                        ("Tüm Dosyalar", "*.*")
-                    ]
-                )
-                root.destroy()
-            except Exception as ex:
-                # Masaüstünde tkinter başarısız olursa yine mobil filepicker dene
+            is_mobile = hasattr(page, "platform") and page.platform in [ft.PagePlatform.ANDROID, ft.PagePlatform.IOS]
+            if not is_mobile and ("ANDROID_ROOT" in os.environ or "ANDROID_DATA" in os.environ):
+                is_mobile = True
+
+            # Masaüstünde öncelikle Tkinter penceresini dene (eğer mobilde değilsek)
+            if not is_mobile:
                 try:
-                    mobil_file_picker.pick_files(
-                        dialog_title="Fiş / Fatura Fotoğrafı Seçin",
-                        file_type=ft.FilePickerFileType.IMAGE
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes("-topmost", True)
+                    dosya_yolu = filedialog.askopenfilename(
+                        title="Fiş / Fatura Görseli veya PDF Seçin",
+                        filetypes=[
+                            ("Fiş ve Fatura Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"),
+                            ("PDF Faturalar", "*.pdf"),
+                            ("Resim Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic"),
+                            ("Tüm Dosyalar", "*.*")
+                        ]
                     )
-                    return
+                    root.destroy()
                 except Exception:
-                    show_app_snackbar(page, f"Dosya seçici açılamadı: {ex}", color="#ef4444")
+                    dosya_yolu = None
+
+            # Mobilde veya Tkinter açılmazsa Flet modern FilePicker servisini asenkron çağır
+            if not dosya_yolu:
+                try:
+                    picker = ft.FilePicker()
+                    res = picker.pick_files(
+                        dialog_title="Fiş / Fatura Görseli Seçin",
+                        allow_multiple=False,
+                        with_data=True
+                    )
+                    if asyncio.iscoroutine(res):
+                        secilen_dosyalar = await res
+                    else:
+                        secilen_dosyalar = res
+
+                    if secilen_dosyalar and len(secilen_dosyalar) > 0:
+                        secilen = secilen_dosyalar[0]
+                        p = getattr(secilen, "path", None)
+                        if p and os.path.exists(str(p)):
+                            dosya_yolu = str(p)
+                        elif hasattr(secilen, "bytes") and secilen.bytes:
+                            import tempfile
+                            uzanti = ".jpg"
+                            fname = getattr(secilen, "name", "fis.jpg")
+                            if "." in fname:
+                                uzanti = "." + fname.rsplit(".", 1)[-1]
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=uzanti) as tmp_f:
+                                tmp_f.write(secilen.bytes)
+                                dosya_yolu = tmp_f.name
+                except Exception as err_pick:
+                    print("FilePicker hatası:", err_pick)
+                    bilgi_mesaji.value = f"⚠️ Dosya seçici açılamadı: {str(err_pick)[:40]}"
+                    bilgi_mesaji.color = "#ef4444"
+                    try:
+                        bilgi_mesaji.update()
+                    except Exception:
+                        pass
                     return
 
-            if dosya_yolu:
+            if dosya_yolu and os.path.exists(dosya_yolu):
                 fis_gorselini_tara_ve_goster(dosya_yolu)
+            else:
+                bilgi_mesaji.value = "ℹ️ Fiş seçimi iptal edildi."
+                bilgi_mesaji.color = "#64748b"
+                try:
+                    bilgi_mesaji.update()
+                except Exception:
+                    pass
 
-        def csv_yukle_tiklandi(e):
-            dosya_yolu = None
+        async def csv_yukle_tiklandi(e=None):
+            bilgi_mesaji.value = "📥 CSV dosyası seçici açılıyor..."
+            bilgi_mesaji.color = "#2563eb"
             try:
-                import tkinter as tk
-                from tkinter import filedialog
-                root = tk.Tk()
-                root.withdraw()
-                root.attributes("-topmost", True)
-                dosya_yolu = filedialog.askopenfilename(
-                    title="Bütçe CSV Dosyasını Seçin",
-                    filetypes=[("CSV Dosyaları", "*.csv"), ("Tüm Dosyalar", "*.*")]
-                )
-                root.destroy()
-            except Exception as ex:
-                print("Dosya seçici açılamadı:", ex)
+                bilgi_mesaji.update()
+            except Exception:
+                pass
+
+            dosya_yolu = None
+            is_mobile = hasattr(page, "platform") and page.platform in [ft.PagePlatform.ANDROID, ft.PagePlatform.IOS]
+            if not is_mobile and ("ANDROID_ROOT" in os.environ or "ANDROID_DATA" in os.environ):
+                is_mobile = True
+
+            if not is_mobile:
+                try:
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes("-topmost", True)
+                    dosya_yolu = filedialog.askopenfilename(
+                        title="Bütçe CSV Dosyasını Seçin",
+                        filetypes=[("CSV Dosyaları", "*.csv"), ("Tüm Dosyalar", "*.*")]
+                    )
+                    root.destroy()
+                except Exception:
+                    dosya_yolu = None
+
+            if not dosya_yolu:
+                try:
+                    picker = ft.FilePicker()
+                    res = picker.pick_files(
+                        dialog_title="CSV Dosyası Seçin",
+                        allow_multiple=False,
+                        with_data=True
+                    )
+                    if asyncio.iscoroutine(res):
+                        secilen_dosyalar = await res
+                    else:
+                        secilen_dosyalar = res
+
+                    if secilen_dosyalar and len(secilen_dosyalar) > 0:
+                        secilen = secilen_dosyalar[0]
+                        p = getattr(secilen, "path", None)
+                        if p and os.path.exists(str(p)):
+                            dosya_yolu = str(p)
+                        elif hasattr(secilen, "bytes") and secilen.bytes:
+                            import tempfile
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_f:
+                                tmp_f.write(secilen.bytes)
+                                dosya_yolu = tmp_f.name
+                except Exception as ex_csv_pick:
+                    print("CSV picker hatası:", ex_csv_pick)
 
             if dosya_yolu and os.path.exists(dosya_yolu):
                 csv_icerigini_yukle(dosya_yolu)
 
-        # CSV İndir / Dışa Aktar Butonu
-        def csv_indir_tiklandi(e):
-            dosya_yolu = None
+        async def csv_indir_tiklandi(e=None):
             try:
-                import tkinter as tk
-                from tkinter import filedialog
-                root = tk.Tk()
-                root.withdraw()
-                root.attributes("-topmost", True)
                 t_bas = secilen_donem_bas[0].strftime("%d.%m.%Y")
                 t_bit = secilen_donem_bit[0].strftime("%d.%m.%Y")
                 varsayilan_isim = f"HaneButcesi_{t_bas}_{t_bit}.csv" if not tum_zamanlar_modu[0] else "HaneButcesi_TumKayitlar.csv"
-                dosya_yolu = filedialog.asksaveasfilename(
-                    title="Bütçe Verilerini CSV Olarak Kaydet",
-                    defaultextension=".csv",
-                    initialfile=varsayilan_isim,
-                    filetypes=[("CSV Dosyası", "*.csv")]
-                )
-                root.destroy()
-            except Exception as ex:
-                print("Kaydetme penceresi hatası:", ex)
 
-            if dosya_yolu:
-                try:
-                    with open(dosya_yolu, "w", encoding="utf-8-sig", newline="") as f:
-                        writer = csv.writer(f, delimiter=",", quoting=csv.QUOTE_MINIMAL)
-                        # Kullanıcının verdiği birebir aynı CSV başlığı
-                        writer.writerow(["Tarih", "Firma/Kurum", "Ürün/Hizmet", "Kategori", "Miktar/Adet", "Birim Fiyat", "Toplam Tutar"])
+                import io
+                out_buf = io.StringIO()
+                writer = csv.writer(out_buf, delimiter=",", quoting=csv.QUOTE_MINIMAL)
+                writer.writerow(["Tarih", "Firma/Kurum", "Ürün/Hizmet", "Kategori", "Miktar/Adet", "Birim Fiyat", "Toplam Tutar"])
 
-                        # Aktif döneme göre filtrelenen veriler
-                        for item in islemler:
-                            t_date = stringden_tarih_al(item.get("tarih"))
-                            if not tum_zamanlar_modu[0]:
-                                if not t_date or not (secilen_donem_bas[0] <= t_date <= secilen_donem_bit[0]):
-                                    continue
+                yazilan_adet = 0
+                for item in islemler:
+                    t_date = stringden_tarih_al(item.get("tarih"))
+                    if not tum_zamanlar_modu[0]:
+                        if not t_date or not (secilen_donem_bas[0] <= t_date <= secilen_donem_bit[0]):
+                            continue
 
-                            tarih_tam = f"{item.get('tarih', '')} {item.get('saat', '')}".strip()
-                            firma = item.get("firma") or item.get("kaynak") or ""
-                            urun = item.get("urun") or item.get("aciklama") or ""
-                            kategori = item.get("kategori") or "Diğer"
-                            miktar = item.get("miktar") or ""
-                            birim_fiyat = item.get("birim_fiyat") or ""
-                            toplam_tutar = format_turk_para(item.get("tutar") or 0.0)
+                    tarih_tam = f"{item.get('tarih', '')} {item.get('saat', '')}".strip()
+                    firma = item.get("firma") or item.get("kaynak") or ""
+                    urun = item.get("urun") or item.get("aciklama") or ""
+                    kategori = item.get("kategori") or "Diğer"
+                    miktar = item.get("miktar") or ""
+                    birim_fiyat = item.get("birim_fiyat") or ""
+                    toplam_tutar = format_turk_para(item.get("tutar") or 0.0)
 
-                            writer.writerow([tarih_tam, firma, urun, kategori, miktar, birim_fiyat, toplam_tutar])
+                    writer.writerow([tarih_tam, firma, urun, kategori, miktar, birim_fiyat, toplam_tutar])
+                    yazilan_adet += 1
 
-                    bilgi_mesaji.value = f"✅ Veriler CSV olarak kaydedildi:\n{os.path.basename(dosya_yolu)}"
+                csv_verisi = out_buf.getvalue().encode("utf-8-sig")
+
+                # Android İndirilenler (Download) klasörüne yazmayı dene
+                kaydedildi = False
+                indirilenler_yollari = [
+                    "/storage/emulated/0/Download",
+                    "/sdcard/Download",
+                    os.path.expanduser("~/Downloads")
+                ]
+                for dpath in indirilenler_yollari:
+                    if os.path.exists(dpath) and os.path.isdir(dpath):
+                        hedef_dosya = os.path.join(dpath, varsayilan_isim)
+                        try:
+                            with open(hedef_dosya, "wb") as f_out:
+                                f_out.write(csv_verisi)
+                            bilgi_mesaji.value = f"✅ {yazilan_adet} işlem İndirilenler klasörüne kaydedildi:\n📁 {varsayilan_isim}"
+                            bilgi_mesaji.color = "green"
+                            kaydedildi = True
+                            try:
+                                bilgi_mesaji.update()
+                            except Exception:
+                                pass
+                            break
+                        except Exception:
+                            pass
+
+                # Masaüstü veya alternatif olarak kaydetme penceresi dene
+                if not kaydedildi:
+                    try:
+                        import tkinter as tk
+                        from tkinter import filedialog
+                        root = tk.Tk()
+                        root.withdraw()
+                        root.attributes("-topmost", True)
+                        dosya_yolu = filedialog.asksaveasfilename(
+                            title="Bütçe Verilerini CSV Olarak Kaydet",
+                            defaultextension=".csv",
+                            initialfile=varsayilan_isim,
+                            filetypes=[("CSV Dosyası", "*.csv")]
+                        )
+                        root.destroy()
+                        if dosya_yolu:
+                            with open(dosya_yolu, "wb") as f_save:
+                                f_save.write(csv_verisi)
+                            bilgi_mesaji.value = f"✅ {yazilan_adet} işlem CSV olarak kaydedildi:\n{os.path.basename(dosya_yolu)}"
+                            bilgi_mesaji.color = "green"
+                            kaydedildi = True
+                    except Exception:
+                        pass
+
+                # Son çare: Flet FilePicker save_file veya yerel dosya
+                if not kaydedildi:
+                    try:
+                        picker = ft.FilePicker()
+                        res = picker.save_file(
+                            dialog_title="CSV Olarak İndir",
+                            file_name=varsayilan_isim,
+                            src_bytes=csv_verisi
+                        )
+                        if asyncio.iscoroutine(res):
+                            sp = await res
+                        else:
+                            sp = res
+                        if sp:
+                            bilgi_mesaji.value = f"✅ {yazilan_adet} işlem CSV olarak kaydedildi."
+                            bilgi_mesaji.color = "green"
+                            kaydedildi = True
+                    except Exception:
+                        pass
+
+                if not kaydedildi:
+                    with open(varsayilan_isim, "wb") as f_loc:
+                        f_loc.write(csv_verisi)
+                    bilgi_mesaji.value = f"✅ {yazilan_adet} işlem kaydedildi:\n{varsayilan_isim}"
                     bilgi_mesaji.color = "green"
+
+                try:
                     page.update()
-                except Exception as ex:
-                    bilgi_mesaji.value = f"⚠️ CSV kaydetme hatası: {str(ex)[:45]}"
-                    bilgi_mesaji.color = "red"
+                except Exception:
+                    pass
+            except Exception as ex_indir:
+                bilgi_mesaji.value = f"⚠️ CSV indirme hatası: {str(ex_indir)[:45]}"
+                bilgi_mesaji.color = "red"
+                try:
                     page.update()
+                except Exception:
+                    pass
 
         # --- DÖNEM DEĞİŞTİRME MANTIĞI ---
         def donem_kaydir(yon):
@@ -2226,15 +2470,15 @@ def main(page: ft.Page):
             donem_kullanici_harcamalari = {}
             donem_kullaniciya_aktarilan = {}
 
-            # Dönem başlığı güncellemesi
-            bas_str = secilen_donem_bas[0].strftime("%d.%m.%Y")
-            bit_str = secilen_donem_bit[0].strftime("%d.%m.%Y")
+            # Dönem başlığı güncellemesi (Kompakt ve Şık Format)
+            bas_kisa = secilen_donem_bas[0].strftime("%d.%m")
+            bit_tam = secilen_donem_bit[0].strftime("%d.%m.%Y")
             if tum_zamanlar_modu[0]:
-                donem_metni.value = "📅 Tüm Zamanlar (Tüm Kayıtlar)"
-                donem_toggle_btn.text = "Döneme Dön"
+                donem_metni.value = "📅 Tüm Zamanlar (Filtresiz)"
+                set_button_label(donem_toggle_btn, "📅 Seçili Döneme Dön")
             else:
-                donem_metni.value = f"📅 {bas_str} - {bit_str}"
-                donem_toggle_btn.text = "Tümünü Gör"
+                donem_metni.value = f"📅 {bas_kisa} - {bit_tam}"
+                set_button_label(donem_toggle_btn, "🌐 Tüm Zamanları Gör (Filtresiz)")
 
             # Döneme uyan kayıtları topla, istatistikleri ve filtreleri hesapla
             toplam_donem_gelir_sayisi = 0
@@ -2340,24 +2584,24 @@ def main(page: ft.Page):
                 duzenle_butonu = ft.IconButton(
                     icon=ft.Icons.EDIT_OUTLINED,
                     icon_color="#2563eb",
-                    icon_size=15,
-                    width=22,
-                    height=22,
+                    icon_size=18,
+                    width=26,
+                    height=26,
                     padding=0,
                     tooltip="Düzenle / Kategori Değiştir",
                     on_click=lambda e, it=item: islem_duzenle_modal_ac(it)
-                ) if (yonetici_mi or item.get("kullanici") == kullanici) else ft.Container(width=0)
+                )
 
                 sil_butonu = ft.IconButton(
                     icon=ft.Icons.DELETE_OUTLINE,
-                    icon_color="#94a3b8",
-                    icon_size=15,
-                    width=22,
-                    height=22,
+                    icon_color="#ef4444",
+                    icon_size=18,
+                    width=26,
+                    height=26,
                     padding=0,
                     tooltip="Sil",
                     on_click=lambda e, it=item: silme_onayi_iste(it)
-                ) if yonetici_mi else ft.Container(width=0)
+                )
 
                 satir = ft.Container(
                     content=ft.Row([
@@ -2666,23 +2910,27 @@ def main(page: ft.Page):
             oturum_sil()
             main(page)
 
-        # Dönem Seçim Araç Çubuğu (Modern Kapsayıcı)
-        onceki_btn = make_button("◀", width=36, height=32, outlined=True, on_click=lambda _: donem_kaydir("onceki"))
-        sonraki_btn = make_button("▶", width=36, height=32, outlined=True, on_click=lambda _: donem_kaydir("sonraki"))
-        donem_toggle_btn = make_button("Tümünü Gör", width=95, height=32, outlined=True, on_click=tum_zamanlar_toggle)
+        # Dönem Seçim Araç Çubuğu (2 Kademeli, Asla Kırpılmayan ve Taşmayan Tasarım)
+        onceki_btn = make_button("◀", width=36, height=32, outlined=True, tooltip="Önceki Bütçe Dönemi", on_click=lambda _: donem_kaydir("onceki"))
+        sonraki_btn = make_button("▶", width=36, height=32, outlined=True, tooltip="Sonraki Bütçe Dönemi", on_click=lambda _: donem_kaydir("sonraki"))
+        donem_toggle_btn = make_button("🌐 Tüm Zamanları Gör (Filtresiz)", height=32, outlined=True, on_click=tum_zamanlar_toggle)
 
         donem_bar = ft.Container(
-            content=ft.Row([
-                onceki_btn,
-                donem_metni,
-                sonraki_btn,
-                donem_toggle_btn
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            bgcolor="#f8fafc",
+            content=ft.Column([
+                ft.Row([
+                    onceki_btn,
+                    donem_metni,
+                    sonraki_btn,
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Row([
+                    donem_toggle_btn
+                ], alignment=ft.MainAxisAlignment.CENTER)
+            ], spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            bgcolor="white",
             border=make_border_all(1, "#e2e8f0"),
             border_radius=12,
-            padding=make_padding(8, 4),
-            width=360
+            padding=make_padding(8, 6),
+            width=355
         )
 
         # Liste Araç Çubuğu (Kronolojik Sıralama, En Başa / En Sona Git ve Toplu Sil)
@@ -2699,23 +2947,29 @@ def main(page: ft.Page):
 
         siralama_btn = make_button(
             "⏱️ Yeni ➔ Eski" if siralama_en_yeni[0] else "⏱️ Eski ➔ Yeni",
-            height=32,
+            height=30,
             outlined=True,
             on_click=siralama_toggle
         )
-        toplu_sil_btn = make_button("🗑️ Toplu Sil", height=32, bgcolor="#d32f2f", color="white", on_click=toplu_silme_onayi_iste) if yonetici_mi else ft.Container()
+        toplu_sil_btn = make_button("🗑️ Toplu Sil", height=30, bgcolor="#ef4444", color="white", tooltip="Listelenen Kayıtları Kalıcı Olarak Sil", on_click=toplu_silme_onayi_iste)
 
         liste_ust_bar = ft.Container(
-            content=ft.Row([
-                ft.Text("İşlem Geçmişi", weight=ft.FontWeight.BOLD, size=14),
+            content=ft.Column([
+                ft.Row([
+                    ft.Row([
+                        ft.Icon(ft.Icons.RECEIPT_LONG, size=18, color="#1e293b"),
+                        ft.Text("İşlem Geçmişi", weight=ft.FontWeight.BOLD, size=14, color="#1e293b"),
+                    ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    toplu_sil_btn
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Row([
                     siralama_btn,
-                    make_button("⬆", width=34, height=32, outlined=True, tooltip="En Başa Git", on_click=listeyi_basa_sar),
-                    make_button("⬇", width=34, height=32, outlined=True, tooltip="En Sona Git", on_click=listeyi_sona_sar),
-                    toplu_sil_btn
-                ], spacing=3)
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            width=380
+                    make_button("⬆ Başa", height=30, outlined=True, tooltip="En Başa Git", on_click=listeyi_basa_sar),
+                    make_button("⬇ Sona", height=30, outlined=True, tooltip="En Sona Git", on_click=listeyi_sona_sar),
+                ], spacing=6)
+            ], spacing=6),
+            width=355,
+            padding=make_padding(0, 2)
         )
 
 
@@ -2939,17 +3193,24 @@ def main(page: ft.Page):
                     ft.IconButton(icon=ft.Icons.LOGOUT, icon_size=18, tooltip="Çıkış Yap", on_click=cikis_yap_aksiyon)
                 ], spacing=2)
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            width=360,
+            width=355,
             padding=make_padding(0, 4)
         )
 
-        # Hızlı Aksiyon Butonları (İşlem Ekle, Fiş Tara, CSV Yükle, CSV İndir)
-        hizli_aksiyon_bari = ft.Row([
-            form_ac_kapat_btn,
-            make_button("📸 Fiş Tara", bgcolor="#8b5cf6", color="white", height=36, tooltip="Fiş Fotoğrafı Yükle & AI ile Oku", on_click=fis_tara_tiklandi),
-            make_button("CSV", icon=ft.Icons.UPLOAD_FILE, height=36, outlined=True, tooltip="CSV Yükle", on_click=csv_yukle_tiklandi),
-            make_button("İndir", icon=ft.Icons.DOWNLOAD, height=36, outlined=True, tooltip="CSV Olarak İndir", on_click=csv_indir_tiklandi)
-        ], alignment=ft.MainAxisAlignment.CENTER, spacing=6)
+        # Hızlı Aksiyon Butonları (2 Satırlı Geniş ve Asla Sıkışmayan Tasarım)
+        hizli_aksiyon_bari = ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    form_ac_kapat_btn,
+                    make_button("📸 Fiş Tara", bgcolor="#8b5cf6", color="white", height=36, tooltip="Fiş Fotoğrafı Yükle & AI ile Oku", expand=True, on_click=fis_tara_tiklandi)
+                ], spacing=6),
+                ft.Row([
+                    make_button("📥 CSV Yükle", height=34, outlined=True, tooltip="CSV'den İşlem Yükle", expand=True, on_click=csv_yukle_tiklandi),
+                    make_button("📤 CSV İndir", height=34, outlined=True, tooltip="Kayıtları CSV Olarak İndir", expand=True, on_click=csv_indir_tiklandi)
+                ], spacing=6)
+            ], spacing=6),
+            width=355
+        )
 
         # Liste Konteyneri (Beyaz modern kart içine yerleştirilmiş temiz liste)
         liste_kapsayici = ft.Container(
@@ -2958,7 +3219,7 @@ def main(page: ft.Page):
             border_radius=12,
             border=make_border_all(1, "#e2e8f0"),
             padding=4,
-            width=380
+            width=355
         )
 
         page.add(
