@@ -289,14 +289,17 @@ def harclik_ayarlari_kaydet(ayarlar):
     except Exception as e:
         print("Harçlık ayarları kaydedilemedi:", e)
 
-def son_gorselleri_bul():
+def son_gorselleri_bul(limit=4):
     """Telefonda veya bilgisayarda en son çekilen veya indirilen görselleri bulur."""
     klasorler = [
         "/storage/emulated/0/DCIM/Camera",
         "/storage/emulated/0/DCIM",
         "/storage/emulated/0/Pictures",
+        "/storage/emulated/0/Pictures/Screenshots",
         "/storage/emulated/0/Download",
         "/sdcard/DCIM/Camera",
+        "/sdcard/DCIM",
+        "/sdcard/Pictures",
         "/sdcard/Download",
         os.path.expanduser("~/Downloads"),
         os.path.expanduser("~/Pictures"),
@@ -318,7 +321,16 @@ def son_gorselleri_bul():
             except Exception:
                 pass
     bulunanlar.sort(key=lambda x: x[0], reverse=True)
-    return [yol for _, yol in bulunanlar[:5]]
+    sonuc = []
+    for mtime, yol in bulunanlar[:limit]:
+        try:
+            dt = datetime.datetime.fromtimestamp(mtime)
+            zaman_str = dt.strftime("%d.%m %H:%M")
+        except Exception:
+            zaman_str = ""
+        dosya_adi = os.path.basename(yol)
+        sonuc.append({"yol": yol, "ad": dosya_adi, "zaman": zaman_str})
+    return sonuc
 
 def okul_gunu_mu(tarih, tatil_kontrol=True):
     """Okulların açık olduğu haftaiçi günleri tespit eder (MEB Takvimi uyumlu)."""
@@ -806,6 +818,50 @@ def stringden_tarih_al(tarih_str):
         return None
 
 def main(page: ft.Page):
+    # Platform mobil mi tespiti (Android ve iOS tespiti)
+    def platform_mobil_mi():
+        if hasattr(page, "platform") and page.platform:
+            p_str = str(page.platform).lower()
+            if "android" in p_str or "ios" in p_str:
+                return True
+        import sys
+        if sys.platform in ["android", "ios"] or "android" in sys.platform.lower():
+            return True
+        if any(k in os.environ for k in ["ANDROID_ROOT", "ANDROID_DATA", "FLET_APP_STORAGE_DATA"]):
+            return True
+        if os.path.exists("/storage/emulated/0") or os.path.exists("/sdcard"):
+            return True
+        return False
+
+    # Evrensel Dosya Seçici Tanımı (Flet ile %100 uyumlu başlatma)
+    def on_genel_dosya_secildi(e):
+        if e.files and len(e.files) > 0:
+            f = e.files[0]
+            secilen_yol = getattr(f, "path", None)
+            if not secilen_yol and hasattr(f, "bytes") and f.bytes:
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
+                    tf.write(f.bytes)
+                    secilen_yol = tf.name
+            if secilen_yol and os.path.exists(str(secilen_yol)):
+                fis_gorselini_tara_ve_goster(str(secilen_yol))
+
+    genel_file_picker = ft.FilePicker(on_result=on_genel_dosya_secildi)
+    if hasattr(page, "overlay"):
+        try:
+            page.overlay.append(genel_file_picker)
+        except Exception:
+            pass
+    if hasattr(page, "services"):
+        try:
+            page.services.append(genel_file_picker)
+        except Exception:
+            pass
+    try:
+        page.update()
+    except Exception:
+        pass
+
     page.title = "Hane Bütçesi Takip Sistemi"
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.scroll = ft.ScrollMode.AUTO
@@ -2112,10 +2168,7 @@ def main(page: ft.Page):
 
         # --- %100 KESİN VE HATA VERMEYEN FİŞ TARAMA MERKEZİ ---
         def fis_tara_tiklandi(e=None):
-            # En son çekilen / indirilen fotoğrafları tespit et
-            son_fotolar = son_gorselleri_bul()
-            son_foto_yolu = son_fotolar[0] if son_fotolar else None
-            son_foto_adi = os.path.basename(son_foto_yolu) if son_foto_yolu else ""
+            son_fotolar = son_gorselleri_bul(limit=4)
 
             metin_alani = ft.TextField(
                 label="Fiş / Dekont / SMS Metni Yapıştır",
@@ -2126,20 +2179,22 @@ def main(page: ft.Page):
                 hint_text="Örn: BİM 04.11.2026 Süt 35 TL, Ekmek 10 TL"
             )
 
+            manuel_yol_alani = ft.TextField(
+                label="Manuel Görsel Dosya Yolu (İsteğe Bağlı)",
+                value=son_fotolar[0]["yol"] if son_fotolar else "",
+                text_size=11,
+                dense=True
+            )
+
             def secilen_yolu_tara(dosya_yolu):
                 close_app_dialog(page, fis_dialog)
                 fis_gorselini_tara_ve_goster(dosya_yolu)
 
-            def sistem_secici_tetikle(ev):
+            def sistem_secici_tetikle(ev=None):
                 close_app_dialog(page, fis_dialog)
-                show_app_snackbar(page, "📂 Dosya seçici açılıyor...", color="#2563eb")
+                show_app_snackbar(page, "📂 Telefon galeri ve dosya seçici açılıyor...", color="#2563eb")
 
-                # Önce masaüstünde Tkinter dene
-                is_mobile = hasattr(page, "platform") and page.platform in [ft.PagePlatform.ANDROID, ft.PagePlatform.IOS]
-                if not is_mobile and ("ANDROID_ROOT" in os.environ or "ANDROID_DATA" in os.environ):
-                    is_mobile = True
-
-                if not is_mobile:
+                if not platform_mobil_mi():
                     try:
                         import tkinter as tk
                         from tkinter import filedialog
@@ -2157,42 +2212,37 @@ def main(page: ft.Page):
                     except Exception:
                         pass
 
-                # Mobilde veya Tkinter yoksa Flet FilePicker'ı güvenle çalıştır
-                async def _asenkron_secici():
-                    try:
-                        picker = ft.FilePicker()
-                        if hasattr(page, "services"):
+                # Mobilde hazır genel_file_picker'ı çağır
+                try:
+                    res = genel_file_picker.pick_files(
+                        dialog_title="Fiş Görseli Seçin",
+                        allow_multiple=False,
+                        with_data=True
+                    )
+                    if asyncio.iscoroutine(res):
+                        async def _await_secici():
                             try:
-                                page.services.append(picker)
-                            except Exception:
-                                pass
-                        res = picker.pick_files(
-                            dialog_title="Fiş Görseli Seçin",
-                            allow_multiple=False,
-                            with_data=True
-                        )
-                        if asyncio.iscoroutine(res):
-                            files = await res
-                        else:
-                            files = res
-                        if files and len(files) > 0:
-                            f = files[0]
-                            p = getattr(f, "path", None)
-                            if not p and hasattr(f, "bytes") and f.bytes:
-                                import tempfile
-                                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                                    tf.write(f.bytes)
-                                    p = tf.name
-                            if p and os.path.exists(str(p)):
-                                fis_gorselini_tara_ve_goster(str(p))
-                    except Exception as err:
-                        show_app_snackbar(page, f"Seçici hatası: {err}", color="#ef4444")
+                                files = await res
+                                if files and len(files) > 0:
+                                    f = files[0]
+                                    p = getattr(f, "path", None)
+                                    if not p and hasattr(f, "bytes") and f.bytes:
+                                        import tempfile
+                                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
+                                            tf.write(f.bytes)
+                                            p = tf.name
+                                    if p and os.path.exists(str(p)):
+                                        fis_gorselini_tara_ve_goster(str(p))
+                            except Exception as ex_coro:
+                                print("Await picker hatası:", ex_coro)
 
-                if hasattr(page, "run_task"):
-                    page.run_task(_asenkron_secici)
-                else:
-                    import threading
-                    threading.Thread(target=lambda: asyncio.run(_asenkron_secici()), daemon=True).start()
+                        if hasattr(page, "run_task"):
+                            page.run_task(_await_secici)
+                        else:
+                            import threading
+                            threading.Thread(target=lambda: asyncio.run(_await_secici()), daemon=True).start()
+                except Exception as ex_genel:
+                    show_app_snackbar(page, f"Seçici hatası: {ex_genel}", color="#ef4444")
 
             def metin_coz_tetikle(ev):
                 raw = metin_alani.value.strip()
@@ -2206,36 +2256,52 @@ def main(page: ft.Page):
                     txt_p = tf.name
                 fis_gorselini_tara_ve_goster(txt_p)
 
+            def manuel_yol_tara(ev):
+                yol = manuel_yol_alani.value.strip()
+                if not yol or not os.path.exists(yol):
+                    show_app_snackbar(page, "Belirtilen dosya yolu bulunamadı.", color="#ef4444")
+                    return
+                close_app_dialog(page, fis_dialog)
+                fis_gorselini_tara_ve_goster(yol)
+
             dialog_icerik = [
                 ft.Text("Fiş tarama yöntemini seçin:", size=12, color="#64748b")
             ]
 
-            # 1. En Son Çekilen Fotoğraf (Kameradan) - Telefon için EN HIZLI VE KESİN YÖNTEM
-            if son_foto_yolu and os.path.exists(son_foto_yolu):
-                dialog_icerik.append(
-                    ft.Container(
-                        content=ft.Column([
-                            ft.Row([
-                                ft.Icon(ft.Icons.AUTO_AWESOME, color="#f59e0b", size=18),
-                                ft.Text("En Son Fotoğraf Algılandı!", weight=ft.FontWeight.BOLD, size=12, color="#1e293b")
-                            ], spacing=6),
-                            ft.Text(f"📁 {son_foto_adi}", size=11, color="#475569", no_wrap=True),
-                            make_button(
-                                "⚡ Bu Fotoğrafı Oku (1 Tıkla)",
-                                bgcolor="#8b5cf6",
-                                color="white",
-                                height=36,
-                                on_click=lambda _: secilen_yolu_tara(son_foto_yolu)
-                            )
-                        ], spacing=4),
-                        bgcolor="#f5f3ff",
-                        border=make_border_all(1, "#ddd6fe"),
-                        border_radius=10,
-                        padding=10
+            # 1. Telefon Galerisindeki Son Fotoğraflar (Kamerayla yeni çekilenler)
+            if son_fotolar:
+                foto_kartlari = []
+                for idx, foto in enumerate(son_fotolar[:3]):
+                    yol = foto["yol"]
+                    ad = foto["ad"]
+                    zaman = foto["zaman"]
+                    foto_kartlari.append(
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.IMAGE, color="#8b5cf6", size=18),
+                                ft.Column([
+                                    ft.Text(ad, size=11, weight=ft.FontWeight.W_600, no_wrap=True, max_lines=1),
+                                    ft.Text(f"📅 {zaman}", size=9, color="#64748b")
+                                ], spacing=1, expand=True),
+                                make_button("⚡ Oku", bgcolor="#8b5cf6", color="white", height=28, on_click=lambda _, y=yol: secilen_yolu_tara(y))
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                            bgcolor="#f5f3ff",
+                            border=make_border_all(1, "#ddd6fe"),
+                            border_radius=8,
+                            padding=make_padding(6, 4)
+                        )
                     )
+                dialog_icerik.append(
+                    ft.Column([
+                        ft.Row([
+                            ft.Icon(ft.Icons.AUTO_AWESOME, color="#f59e0b", size=16),
+                            ft.Text("Telefonda Bulunan Son Fotoğraflar:", weight=ft.FontWeight.BOLD, size=11, color="#1e293b")
+                        ], spacing=4),
+                        *foto_kartlari
+                    ], spacing=4)
                 )
 
-            # 2. Galeri / Dosya Seçici
+            # 2. Sistem Galeri / Dosya Seçici Butonu
             dialog_icerik.extend([
                 make_button(
                     "📁 Telefon Galerisinden / Dosyalardan Seç",
@@ -2253,6 +2319,14 @@ def main(page: ft.Page):
                     outlined=True,
                     height=34,
                     on_click=metin_coz_tetikle
+                ),
+                ft.Divider(height=10, color="#e2e8f0"),
+                manuel_yol_alani,
+                make_button(
+                    "🔍 Dosya Yolunu Tara",
+                    outlined=True,
+                    height=32,
+                    on_click=manuel_yol_tara
                 )
             ])
 
@@ -2262,8 +2336,9 @@ def main(page: ft.Page):
                     ft.Text("📸 Fiş & Fatura Tarama", size=16, weight=ft.FontWeight.BOLD)
                 ], spacing=8),
                 content=ft.Container(
-                    content=ft.Column(dialog_icerik, spacing=8, tight=True),
+                    content=ft.Column(dialog_icerik, spacing=8, scroll=ft.ScrollMode.AUTO),
                     width=330,
+                    height=380,
                     padding=2
                 ),
                 actions=[
