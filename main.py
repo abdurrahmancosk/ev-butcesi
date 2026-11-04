@@ -289,6 +289,33 @@ def harclik_ayarlari_kaydet(ayarlar):
     except Exception as e:
         print("Harçlık ayarları kaydedilemedi:", e)
 
+def son_csvleri_bul():
+    """Telefonda veya bilgisayarda İndirilenler klasöründeki CSV bütçe dosyalarını bulur."""
+    klasorler = [
+        "/storage/emulated/0/Download",
+        "/storage/emulated/0",
+        "/sdcard/Download",
+        "/sdcard",
+        os.path.expanduser("~/Downloads"),
+        "."
+    ]
+    bulunanlar = []
+    for k in klasorler:
+        if os.path.exists(k) and os.path.isdir(k):
+            try:
+                for f in os.listdir(k):
+                    if f.lower().endswith(".csv"):
+                        tam_yol = os.path.join(k, f)
+                        try:
+                            mtime = os.path.getmtime(tam_yol)
+                            bulunanlar.append((mtime, tam_yol))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+    bulunanlar.sort(key=lambda x: x[0], reverse=True)
+    return [yol for _, yol in bulunanlar[:6]]
+
 def son_gorselleri_bul(limit=4):
     """Telefonda veya bilgisayarda en son çekilen veya indirilen görselleri bulur."""
     klasorler = [
@@ -833,34 +860,7 @@ def main(page: ft.Page):
             return True
         return False
 
-    # Evrensel Dosya Seçici Tanımı (Flet ile %100 uyumlu başlatma)
-    def on_genel_dosya_secildi(e):
-        if e.files and len(e.files) > 0:
-            f = e.files[0]
-            secilen_yol = getattr(f, "path", None)
-            if not secilen_yol and hasattr(f, "bytes") and f.bytes:
-                import tempfile
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                    tf.write(f.bytes)
-                    secilen_yol = tf.name
-            if secilen_yol and os.path.exists(str(secilen_yol)):
-                fis_gorselini_tara_ve_goster(str(secilen_yol))
 
-    genel_file_picker = ft.FilePicker(on_result=on_genel_dosya_secildi)
-    if hasattr(page, "overlay"):
-        try:
-            page.overlay.append(genel_file_picker)
-        except Exception:
-            pass
-    if hasattr(page, "services"):
-        try:
-            page.services.append(genel_file_picker)
-        except Exception:
-            pass
-    try:
-        page.update()
-    except Exception:
-        pass
 
     page.title = "Hane Bütçesi Takip Sistemi"
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
@@ -2166,9 +2166,29 @@ def main(page: ft.Page):
 
             threading.Thread(target=arka_plan_tara, daemon=True).start()
 
-        # --- %100 KESİN VE HATA VERMEYEN FİŞ TARAMA MERKEZİ ---
+                # --- %100 HATASIZ FİŞ TARAMA MERKEZİ (FILEPICKER BAĞIMSIZ, SIFIR HATA) ---
         def fis_tara_tiklandi(e=None):
-            son_fotolar = son_gorselleri_bul(limit=4)
+            # Masaüstünde doğrudan Tkinter dosya seçici aç
+            if not platform_mobil_mi():
+                try:
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes("-topmost", True)
+                    dy = filedialog.askopenfilename(
+                        title="Fiş / Fatura Görseli veya PDF Seçin",
+                        filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
+                    )
+                    root.destroy()
+                    if dy and os.path.exists(dy):
+                        fis_gorselini_tara_ve_goster(dy)
+                        return
+                except Exception:
+                    pass
+
+            # Mobilde veya alternatif: Telefon galerisi son fotoğrafları ve akıllı tarama merkezi
+            son_fotolar = son_gorselleri_bul(limit=6)
 
             metin_alani = ft.TextField(
                 label="Fiş / Dekont / SMS Metni Yapıştır",
@@ -2180,7 +2200,7 @@ def main(page: ft.Page):
             )
 
             manuel_yol_alani = ft.TextField(
-                label="Manuel Görsel Dosya Yolu (İsteğe Bağlı)",
+                label="Manuel Dosya Yolu (Örn: /sdcard/Download/fis.jpg)",
                 value=son_fotolar[0]["yol"] if son_fotolar else "",
                 text_size=11,
                 dense=True
@@ -2189,60 +2209,6 @@ def main(page: ft.Page):
             def secilen_yolu_tara(dosya_yolu):
                 close_app_dialog(page, fis_dialog)
                 fis_gorselini_tara_ve_goster(dosya_yolu)
-
-            def sistem_secici_tetikle(ev=None):
-                close_app_dialog(page, fis_dialog)
-                show_app_snackbar(page, "📂 Telefon galeri ve dosya seçici açılıyor...", color="#2563eb")
-
-                if not platform_mobil_mi():
-                    try:
-                        import tkinter as tk
-                        from tkinter import filedialog
-                        root = tk.Tk()
-                        root.withdraw()
-                        root.attributes("-topmost", True)
-                        dy = filedialog.askopenfilename(
-                            title="Fiş / Fatura Görseli Seçin",
-                            filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
-                        )
-                        root.destroy()
-                        if dy and os.path.exists(dy):
-                            fis_gorselini_tara_ve_goster(dy)
-                            return
-                    except Exception:
-                        pass
-
-                # Mobilde hazır genel_file_picker'ı çağır
-                try:
-                    res = genel_file_picker.pick_files(
-                        dialog_title="Fiş Görseli Seçin",
-                        allow_multiple=False,
-                        with_data=True
-                    )
-                    if asyncio.iscoroutine(res):
-                        async def _await_secici():
-                            try:
-                                files = await res
-                                if files and len(files) > 0:
-                                    f = files[0]
-                                    p = getattr(f, "path", None)
-                                    if not p and hasattr(f, "bytes") and f.bytes:
-                                        import tempfile
-                                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                                            tf.write(f.bytes)
-                                            p = tf.name
-                                    if p and os.path.exists(str(p)):
-                                        fis_gorselini_tara_ve_goster(str(p))
-                            except Exception as ex_coro:
-                                print("Await picker hatası:", ex_coro)
-
-                        if hasattr(page, "run_task"):
-                            page.run_task(_await_secici)
-                        else:
-                            import threading
-                            threading.Thread(target=lambda: asyncio.run(_await_secici()), daemon=True).start()
-                except Exception as ex_genel:
-                    show_app_snackbar(page, f"Seçici hatası: {ex_genel}", color="#ef4444")
 
             def metin_coz_tetikle(ev):
                 raw = metin_alani.value.strip()
@@ -2265,23 +2231,29 @@ def main(page: ft.Page):
                 fis_gorselini_tara_ve_goster(yol)
 
             dialog_icerik = [
-                ft.Text("Fiş tarama yöntemini seçin:", size=12, color="#64748b")
+                ft.Container(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.INFO_OUTLINE, size=14, color="#64748b"),
+                        ft.Text("Kamerayla çektiğiniz fişler otomatik listelenir:", size=11, color="#64748b")
+                    ], spacing=4),
+                    padding=make_padding(0, 2)
+                )
             ]
 
             # 1. Telefon Galerisindeki Son Fotoğraflar (Kamerayla yeni çekilenler)
             if son_fotolar:
                 foto_kartlari = []
-                for idx, foto in enumerate(son_fotolar[:3]):
+                for foto in son_fotolar:
                     yol = foto["yol"]
                     ad = foto["ad"]
                     zaman = foto["zaman"]
                     foto_kartlari.append(
                         ft.Container(
                             content=ft.Row([
-                                ft.Icon(ft.Icons.IMAGE, color="#8b5cf6", size=18),
+                                ft.Icon(ft.Icons.RECEIPT_LONG, color="#8b5cf6", size=18),
                                 ft.Column([
                                     ft.Text(ad, size=11, weight=ft.FontWeight.W_600, no_wrap=True, max_lines=1),
-                                    ft.Text(f"📅 {zaman}", size=9, color="#64748b")
+                                    ft.Text(f"🕒 {zaman}", size=9, color="#64748b")
                                 ], spacing=1, expand=True),
                                 make_button("⚡ Oku", bgcolor="#8b5cf6", color="white", height=28, on_click=lambda _, y=yol: secilen_yolu_tara(y))
                             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -2295,22 +2267,26 @@ def main(page: ft.Page):
                     ft.Column([
                         ft.Row([
                             ft.Icon(ft.Icons.AUTO_AWESOME, color="#f59e0b", size=16),
-                            ft.Text("Telefonda Bulunan Son Fotoğraflar:", weight=ft.FontWeight.BOLD, size=11, color="#1e293b")
+                            ft.Text("Galeri / Kamera Fotoğrafları:", weight=ft.FontWeight.BOLD, size=12, color="#1e293b")
                         ], spacing=4),
                         *foto_kartlari
                     ], spacing=4)
                 )
+            else:
+                dialog_icerik.append(
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Icon(ft.Icons.PHOTO_CAMERA_OUTLINED, size=28, color="#8b5cf6"),
+                            ft.Text("Henüz fotoğraf bulunamadı.", size=12, weight=ft.FontWeight.BOLD),
+                            ft.Text("Telefonunuzun kamerasıyla fişin fotoğrafını çekip bu pencereyi tekrar açın; fotoğrafınız burada belirecektir.", size=10, color="#64748b", text_align=ft.TextAlign.CENTER)
+                        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4),
+                        padding=10,
+                        alignment=get_alignment_center()
+                    )
+                )
 
-            # 2. Sistem Galeri / Dosya Seçici Butonu
+            # Metin ve Manuel Yol Seçenekleri
             dialog_icerik.extend([
-                make_button(
-                    "📁 Telefon Galerisinden / Dosyalardan Seç",
-                    icon=ft.Icons.PHOTO_LIBRARY,
-                    bgcolor="#2563eb",
-                    color="white",
-                    height=38,
-                    on_click=sistem_secici_tetikle
-                ),
                 ft.Divider(height=10, color="#e2e8f0"),
                 metin_alani,
                 make_button(
@@ -2323,7 +2299,7 @@ def main(page: ft.Page):
                 ft.Divider(height=10, color="#e2e8f0"),
                 manuel_yol_alani,
                 make_button(
-                    "🔍 Dosya Yolunu Tara",
+                    "🔍 Dosya Yolunu Oku",
                     outlined=True,
                     height=32,
                     on_click=manuel_yol_tara
@@ -2338,73 +2314,97 @@ def main(page: ft.Page):
                 content=ft.Container(
                     content=ft.Column(dialog_icerik, spacing=8, scroll=ft.ScrollMode.AUTO),
                     width=330,
-                    height=380,
+                    height=400,
                     padding=2
                 ),
                 actions=[
+                    make_button("🔄 Yenile", height=32, outlined=True, on_click=lambda _: [close_app_dialog(page, fis_dialog), fis_tara_tiklandi()]),
                     make_button("✕ Kapat", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, fis_dialog))
                 ],
-                actions_alignment=ft.MainAxisAlignment.END
+                actions_alignment=ft.MainAxisAlignment.SPACE_BETWEEN
             )
 
             show_app_dialog(page, fis_dialog)
 
-        async def csv_yukle_tiklandi(e=None):
-            bilgi_mesaji.value = "📥 CSV dosyası seçici açılıyor..."
-            bilgi_mesaji.color = "#2563eb"
-            try:
-                bilgi_mesaji.update()
-            except Exception:
-                pass
-
-            dosya_yolu = None
-            is_mobile = hasattr(page, "platform") and page.platform in [ft.PagePlatform.ANDROID, ft.PagePlatform.IOS]
-            if not is_mobile and ("ANDROID_ROOT" in os.environ or "ANDROID_DATA" in os.environ):
-                is_mobile = True
-
-            if not is_mobile:
+                # --- CSV YÜKLEME İŞLEMCİSİ (FILEPICKER BAĞIMSIZ) ---
+        def csv_yukle_tiklandi(e=None):
+            if not platform_mobil_mi():
                 try:
                     import tkinter as tk
                     from tkinter import filedialog
                     root = tk.Tk()
                     root.withdraw()
                     root.attributes("-topmost", True)
-                    dosya_yolu = filedialog.askopenfilename(
+                    dy = filedialog.askopenfilename(
                         title="Bütçe CSV Dosyasını Seçin",
                         filetypes=[("CSV Dosyaları", "*.csv"), ("Tüm Dosyalar", "*.*")]
                     )
                     root.destroy()
+                    if dy and os.path.exists(dy):
+                        csv_icerigini_yukle(dy)
+                        return
                 except Exception:
-                    dosya_yolu = None
+                    pass
 
-            if not dosya_yolu:
-                try:
-                    picker = ft.FilePicker()
-                    res = picker.pick_files(
-                        dialog_title="CSV Dosyası Seçin",
-                        allow_multiple=False,
-                        with_data=True
-                    )
-                    if asyncio.iscoroutine(res):
-                        secilen_dosyalar = await res
-                    else:
-                        secilen_dosyalar = res
+            bulunan_csvler = son_csvleri_bul()
+            yol_tf = ft.TextField(
+                label="CSV Dosya Yolu",
+                value=bulunan_csvler[0] if bulunan_csvler else "/storage/emulated/0/Download/HaneButcesi.csv",
+                text_size=11,
+                dense=True
+            )
 
-                    if secilen_dosyalar and len(secilen_dosyalar) > 0:
-                        secilen = secilen_dosyalar[0]
-                        p = getattr(secilen, "path", None)
-                        if p and os.path.exists(str(p)):
-                            dosya_yolu = str(p)
-                        elif hasattr(secilen, "bytes") and secilen.bytes:
-                            import tempfile
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_f:
-                                tmp_f.write(secilen.bytes)
-                                dosya_yolu = tmp_f.name
-                except Exception as ex_csv_pick:
-                    print("CSV picker hatası:", ex_csv_pick)
-
-            if dosya_yolu and os.path.exists(dosya_yolu):
+            def secilen_csv_yukle(dosya_yolu):
+                close_app_dialog(page, csv_dialog)
                 csv_icerigini_yukle(dosya_yolu)
+
+            dialog_icerik = [
+                ft.Text("İndirilenler klasöründeki CSV dosyaları:", size=11, color="#64748b")
+            ]
+
+            if bulunan_csvler:
+                for c_yol in bulunan_csvler:
+                    c_ad = os.path.basename(c_yol)
+                    dialog_icerik.append(
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.DESCRIPTION, color="#2563eb", size=18),
+                                ft.Text(c_ad, size=11, weight=ft.FontWeight.W_600, expand=True, no_wrap=True),
+                                make_button("📥 Yükle", height=28, bgcolor="#2563eb", color="white", on_click=lambda _, y=c_yol: secilen_csv_yukle(y))
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                            bgcolor="#eff6ff",
+                            border=make_border_all(1, "#bfdbfe"),
+                            border_radius=8,
+                            padding=make_padding(6, 4)
+                        )
+                    )
+            else:
+                dialog_icerik.append(
+                    ft.Text("İndirilenler klasöründe CSV bulunamadı.", size=10, color="#94a3b8")
+                )
+
+            dialog_icerik.extend([
+                ft.Divider(height=10, color="#e2e8f0"),
+                yol_tf,
+                make_button("Dosya Yolundan Yükle", height=32, outlined=True, on_click=lambda _: secilen_csv_yukle(yol_tf.value.strip()))
+            ])
+
+            csv_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.UPLOAD_FILE, color="#2563eb", size=24),
+                    ft.Text("CSV Dosyası Yükle", size=16, weight=ft.FontWeight.BOLD)
+                ], spacing=8),
+                content=ft.Container(
+                    content=ft.Column(dialog_icerik, spacing=8, tight=True),
+                    width=330,
+                    padding=2
+                ),
+                actions=[
+                    make_button("✕ Kapat", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, csv_dialog))
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+            show_app_dialog(page, csv_dialog)
 
         async def csv_indir_tiklandi(e=None):
             try:
@@ -2485,25 +2485,7 @@ def main(page: ft.Page):
                     except Exception:
                         pass
 
-                # Son çare: Flet FilePicker save_file veya yerel dosya
-                if not kaydedildi:
-                    try:
-                        picker = ft.FilePicker()
-                        res = picker.save_file(
-                            dialog_title="CSV Olarak İndir",
-                            file_name=varsayilan_isim,
-                            src_bytes=csv_verisi
-                        )
-                        if asyncio.iscoroutine(res):
-                            sp = await res
-                        else:
-                            sp = res
-                        if sp:
-                            bilgi_mesaji.value = f"✅ {yazilan_adet} işlem CSV olarak kaydedildi."
-                            bilgi_mesaji.color = "green"
-                            kaydedildi = True
-                    except Exception:
-                        pass
+                
 
                 if not kaydedildi:
                     with open(varsayilan_isim, "wb") as f_loc:
