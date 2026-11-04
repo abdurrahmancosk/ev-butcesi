@@ -880,6 +880,136 @@ def stringden_tarih_al(tarih_str):
     except Exception:
         return None
 
+
+# ==============================================================================
+# GEÇMİŞ FİYAT HAFIZALI DOĞAL DİL / SÖZEL İŞLEM MOTORU
+# ==============================================================================
+def hafiza_olustur(islemler_listesi):
+    """Kullanıcının geçmiş işlemlerinden ürün ve birim fiyat hafızası oluşturur."""
+    hafiza = {}
+    for it in islemler_listesi:
+        firma = (it.get("firma") or it.get("kaynak") or "").strip()
+        urun = (it.get("urun") or it.get("aciklama") or "").strip()
+        birim = str(it.get("birim_fiyat") or "").strip()
+        kat = it.get("kategori") or "Diğer"
+        if firma and urun and birim and birim != "-":
+            key = f"{firma.lower()} - {urun.lower()}"
+            hafiza[key] = {
+                "firma": firma,
+                "urun": urun,
+                "birim_fiyat": birim,
+                "kategori": kat
+            }
+    return hafiza
+
+def parse_sozel_ifade_yerel(cumle, fiyat_hafizasi):
+    """Çevrimdışı / anlık akıllı kural tabanlı sözel ifade ayrıştırıcı."""
+    c = cumle.strip()
+    
+    # Saat tespiti (örn: 14.21, 14:21)
+    saat_str = datetime.datetime.now().strftime("%H:%M")
+    saat_match = re.search(r'\b([01]?\d|2[0-3])[:.]([0-5]\d)\b', c)
+    if saat_match:
+        saat_str = f"{int(saat_match.group(1)):02d}:{int(saat_match.group(2)):02d}"
+        c_temiz = c[:saat_match.start()] + " " + c[saat_match.end():]
+    else:
+        c_temiz = c
+
+    c_lower = c_temiz.lower()
+
+    # Firma tespiti
+    firmalar = [
+        ("bim", "BİM"), ("bi̇m", "BİM"), ("a101", "A101"), ("şok", "ŞOK"), ("sok", "ŞOK"),
+        ("migros", "Migros"), ("carrefour", "Carrefour"), ("düzgün", "Düzgün Market"),
+        ("tarım kredi", "Tarım Kredi"), ("pazar", "Pazar"), ("fırın", "Fırın"),
+        ("eczane", "Eczane"), ("benzin", "Petrol"), ("petrol", "Petrol"),
+        ("nakit", "Nakit"), ("okul", "Okul"), ("pansiyon", "Pansiyon")
+    ]
+    bulunan_firma = "Market"
+    for k, f_ad in firmalar:
+        if k in c_lower:
+            bulunan_firma = f_ad
+            break
+
+    # Miktar ve ürün kelimesi tespiti
+    miktar_sayi = 1
+    miktar_birim = "adet"
+    urun_kelimesi = ""
+
+    m_match = re.search(r'\b(\d+([.,]\d+)?)\s*(adet|tane|koli|kilo|kg|paket|takım|porsiyon)?\s*([a-zA-ZçğıöşüÇĞİÖŞÜ]+)', c_lower)
+    if m_match:
+        miktar_sayi = float(m_match.group(1).replace(",", "."))
+        if m_match.group(3):
+            miktar_birim = m_match.group(3)
+        kelime = m_match.group(4)
+        if kelime not in ["tl", "lira", "kuruş", "de", "da", "te", "ta", "alındı", "aldım", "yattı"]:
+            urun_kelimesi = kelime
+
+    if not urun_kelimesi:
+        for w in ["ekmek", "süt", "yumurta", "peynir", "çay", "tost", "benzin", "su", "kahve", "simit", "sigara"]:
+            if w in c_lower:
+                urun_kelimesi = w
+                break
+
+    # Fiyat tespiti (cümlede açıkça belirtilmiş mi, yoksa hafızadan mı çekilecek?)
+    fiyat_match = re.search(r'\b(\d+([.,]\d{1,2})?)\s*(tl|lira|liraya|liralık)\b', c_lower)
+    birim_fiyat = None
+    if fiyat_match:
+        toplam_tutar = float(fiyat_match.group(1).replace(",", "."))
+        birim_fiyat = toplam_tutar / miktar_sayi if miktar_sayi else toplam_tutar
+    else:
+        # Fiyat hafızasından hatırlama! (BİM'de ekmek 11 TL vb.)
+        tam_eslesen_urun = (urun_kelimesi or "Ürün").title()
+        bulunan_kat = "Market & Temel Gıda"
+        
+        # 1. Aşama: Firma + Ürün eşleşmesi
+        for (f_k, u_k), d in fiyat_hafizasi.items():
+            if bulunan_firma.lower() in f_k and urun_kelimesi.lower() in u_k:
+                try:
+                    birim_fiyat = float(d["birim_fiyat"].replace(".", "").replace(",", "."))
+                    tam_eslesen_urun = d["urun"]
+                    bulunan_kat = d.get("kategori", "Market & Temel Gıda")
+                    break
+                except Exception:
+                    pass
+        # 2. Aşama: Sadece Ürün adı eşleşmesi
+        if not birim_fiyat:
+            for (f_k, u_k), d in fiyat_hafizasi.items():
+                if urun_kelimesi.lower() in u_k:
+                    try:
+                        birim_fiyat = float(d["birim_fiyat"].replace(".", "").replace(",", "."))
+                        tam_eslesen_urun = d["urun"]
+                        bulunan_kat = d.get("kategori", "Market & Temel Gıda")
+                        break
+                    except Exception:
+                        pass
+        # 3. Aşama: Bilinen genel varsayılan
+        if not birim_fiyat:
+            if "ekmek" in urun_kelimesi.lower():
+                birim_fiyat = 11.0
+                tam_eslesen_urun = "EKMEK TEKLİ"
+            else:
+                birim_fiyat = 25.0
+                tam_eslesen_urun = (urun_kelimesi or "Ürün").title()
+                
+        toplam_tutar = birim_fiyat * miktar_sayi
+        urun_kelimesi = tam_eslesen_urun
+
+    miktar_str = f"{int(miktar_sayi) if miktar_sayi.is_integer() else miktar_sayi} {miktar_birim}"
+    
+    return {
+        "tur": "Gider",
+        "firma": bulunan_firma,
+        "urun": urun_kelimesi or "Ürün",
+        "miktar": miktar_str,
+        "birim_fiyat": f"{birim_fiyat:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+        "tutar": round(toplam_tutar, 2),
+        "tarih": datetime.date.today().strftime("%d.%m.%Y"),
+        "saat": saat_str,
+        "kategori": bulunan_kat if 'bulunan_kat' in locals() else "Market & Temel Gıda",
+        "hafizadan": True
+    }
+
 def main(page: ft.Page):
     # Platform mobil mi tespiti (Android ve iOS tespiti)
     def platform_mobil_mi():
@@ -2029,11 +2159,6 @@ def main(page: ft.Page):
 
         
         # --- AI FİŞ TARAMA İŞLEMCİSİ (Android + Masaüstü Tam Uyumlu) ---
-        def fis_gorselini_tara_ve_goster(dosya_yolu):
-            pass  # reference hook
-
-        fis_analiz_tetikleyici[0] = fis_gorselini_tara_ve_goster
-
         def fis_gorselini_tara_ve_goster(dosya_yolu):
             fis_analiz_tetikleyici[0] = fis_gorselini_tara_ve_goster
             if not dosya_yolu:
@@ -3822,6 +3947,161 @@ def main(page: ft.Page):
             padding=make_padding(0, 4)
         )
 
+
+        # --- DOĞAL DİL / SÖZEL İŞLEM EKLEME ÇUBUĞU ---
+        def sozel_islem_calistir(ev=None):
+            cumle = sozel_input.value.strip()
+            if not cumle:
+                show_app_snackbar(page, "Lütfen bir ifade yazın (Örn: bimden 14.21 de 3 ekmek alındı)", color="#ef4444")
+                return
+
+            bilgi_mesaji.value = "🤖 Yapay zeka ifadeyi çözümlüyor..."
+            bilgi_mesaji.color = "#8b5cf6"
+            try:
+                bilgi_mesaji.update()
+            except Exception:
+                pass
+
+            def arka_plan_sozel():
+                hafiza = hafiza_olustur(islemler)
+                api_key = gemini_api_key_al()
+                sonuc = None
+
+                # Gemini AI ile gelişmiş doğal dil analizi dene
+                if api_key:
+                    try:
+                        hafiza_satirlari = [f"- {v['firma']} | {v['urun']} | Birim Fiyat: {v['birim_fiyat']} TL | Kategori: {v['kategori']}" for v in list(hafiza.values())[:35]]
+                        hafiza_metni = "\n".join(hafiza_satirlari)
+                        su_an = datetime.datetime.now()
+                        bugun_str = su_an.strftime("%d.%m.%Y")
+                        saat_str = su_an.strftime("%H:%M")
+
+                        prompt = f"""Kullanıcının harcama veya gelir ifadesini analiz et.
+Cümle: "{cumle}"
+Bugünün Tarihi: {bugun_str}
+Varsayılan Saat: {saat_str}
+
+Kullanıcının Geçmiş Bütçe Fiyat Hafızası:
+{hafiza_metni}
+
+KURALLAR:
+1. İşlem türü: 'Gider', 'Gelir' veya 'Para Aktarımı'.
+2. Firma/Kurum adı (örn: 'BİM', 'A101', 'Migros', 'Nakit').
+3. Ürün adı (örn: 'EKMEK TEKLİ', 'Süt').
+4. Varsa cümleden saat (örn: '14.21' -> '14:21') ve tarihi çıkar; yoksa varsayılanları kullan.
+5. Miktar (örn: '3 adet', '2 kg').
+6. FİYAT BELİRTİLMEDİYSE: Fiyat Hafızasından o firmanın ürününün birim fiyatını hatırla (Örn: BİM Ekmek = 11.00 TL). Miktar ile çarpıp toplam tutarı hesapla (3 x 11.00 = 33.00 TL).
+7. Kategori ata: 'Market & Temel Gıda', 'Abur Cubur & Atıştırmalık', 'Ev & Faturalar', 'Dışarıda Yemek / Eğlence', 'Giyim', 'Sağlık & Bakım', 'Ulaşım & Yakıt', 'Eğitim & Okul', 'Sigara/Tütün', 'Diğer'.
+
+Yalnızca saf JSON nesnesi döndür:
+{{
+  "tur": "Gider",
+  "firma": "BİM",
+  "urun": "EKMEK TEKLİ",
+  "miktar": "3 adet",
+  "birim_fiyat": "11,00",
+  "tutar": 33.00,
+  "tarih": "{bugun_str}",
+  "saat": "14:21",
+  "kategori": "Market & Temel Gıda"
+}}"""
+                        import urllib.request, ssl
+                        ssl_ctx = ssl.create_default_context()
+                        ssl_ctx.check_hostname = False
+                        ssl_ctx.verify_mode = ssl.CERT_NONE
+                        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+                        payload = {
+                            "contents": [{"parts": [{"text": prompt}]}],
+                            "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"}
+                        }
+                        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"x-goog-api-key": api_key, "Content-Type": "application/json"})
+                        with urllib.request.urlopen(req, timeout=8, context=ssl_ctx) as resp:
+                            res_data = json.loads(resp.read().decode("utf-8"))
+                            cands = res_data.get("candidates", [])
+                            if cands:
+                                txt = cands[0]["content"]["parts"][0]["text"].strip()
+                                if txt.startswith("```json"): txt = txt[7:]
+                                if txt.startswith("```"): txt = txt[3:]
+                                if txt.endswith("```"): txt = txt[:-3]
+                                sonuc = json.loads(txt.strip())
+                    except Exception as ex_g:
+                        print("Gemini sözel hata, yerel ayrıştırıcı devrede:", ex_g)
+                        sonuc = None
+
+                # Yedek / Çevrimdışı Akıllı Ayrıştırıcı
+                if not sonuc:
+                    sonuc = parse_sozel_ifade_yerel(cumle, hafiza)
+
+                if sonuc:
+                    # Kayıt oluştur ve sisteme ekle
+                    yeni_islem = {
+                        "kullanici": kullanici or "Ev Yöneticisi",
+                        "tur": sonuc.get("tur", "Gider"),
+                        "tarih": sonuc.get("tarih") or datetime.date.today().strftime("%d.%m.%Y"),
+                        "saat": sonuc.get("saat") or datetime.datetime.now().strftime("%H:%M"),
+                        "kaynak": "",
+                        "gelir_turu": "",
+                        "aciklama": f"Sözel: {cumle}",
+                        "firma": sonuc.get("firma", "Bilinmeyen"),
+                        "urun": sonuc.get("urun", "Ürün"),
+                        "kategori": sonuc.get("kategori", "Diğer"),
+                        "miktar": sonuc.get("miktar", "1 adet"),
+                        "birim_fiyat": str(sonuc.get("birim_fiyat", "")),
+                        "tutar": float(sonuc.get("tutar", 0.0))
+                    }
+
+                    if supabase:
+                        try:
+                            res = supabase.table("islemler").insert(yeni_islem).execute()
+                            if res and res.data and len(res.data) > 0 and res.data[0].get("id"):
+                                yeni_islem["id"] = res.data[0]["id"]
+                        except Exception as db_err:
+                            print("Supabase sözel kayıt hatası:", db_err)
+
+                    if "id" not in yeni_islem:
+                        mevcut_idler = [it.get("id") for it in islemler if isinstance(it.get("id"), int)]
+                        yeni_islem["id"] = (max(mevcut_idler) + 1) if mevcut_idler else 1
+
+                    islemler.append(yeni_islem)
+                    sozel_input.value = ""
+                    arayuzu_guncelle()
+                    
+                    tutar_str = format_turk_para(yeni_islem["tutar"])
+                    birim_str = yeni_islem.get("birim_fiyat", "")
+                    msg = f"✨ Eklendi: {yeni_islem['firma']} - {yeni_islem['urun']} ({yeni_islem['miktar']} x {birim_str} TL = {tutar_str} TL)"
+                    show_app_snackbar(page, msg, color="#10b981")
+                    bilgi_mesaji.value = msg
+                    bilgi_mesaji.color = "green"
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
+                else:
+                    show_app_snackbar(page, "İfade anlaşılamadı, lütfen tekrar deneyin.", color="#ef4444")
+
+            threading.Thread(target=arka_plan_sozel, daemon=True).start()
+
+        sozel_input = ft.TextField(
+            hint_text="🗣️ Sözel işlem yazın (örn: bimden 14.21 de 3 ekmek alındı)",
+            text_size=11,
+            expand=True,
+            dense=True,
+            border_radius=8,
+            on_submit=sozel_islem_calistir
+        )
+
+        sozel_cubuk = ft.Container(
+            content=ft.Row([
+                sozel_input,
+                make_button("✨ AI Ekle", height=36, bgcolor="#8b5cf6", color="white", on_click=sozel_islem_calistir)
+            ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            bgcolor="white",
+            border=make_border_all(1.2, "#c4b5fd"),
+            border_radius=12,
+            padding=make_padding(6, 6),
+            width=355
+        )
+
         # Hızlı Aksiyon Butonları (2 Satırlı Geniş ve Asla Sıkışmayan Tasarım)
         hizli_aksiyon_bari = ft.Container(
             content=ft.Column([
@@ -3854,6 +4134,7 @@ def main(page: ft.Page):
                 donem_bar,
                 bakiye_karti,
                 ft.Container(height=2),
+                sozel_cubuk,
                 hizli_aksiyon_bari,
                 form_govdesi,
                 ft.Container(height=2),
