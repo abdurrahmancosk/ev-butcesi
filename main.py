@@ -262,6 +262,57 @@ def set_button_label(btn, new_text):
 # ==============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in locals() or "__file__" in globals() else "."
 OTURUM_DOSYASI = os.path.join(BASE_DIR, "oturum.json")
+HARCLIK_AYARLARI_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "harclik_ayarlari.json")
+
+def harclik_ayarlari_oku():
+    varsayilan = {
+        "aktif": True,
+        "cocuk_sayisi": 2,
+        "birim_harclik": 10.0,
+        "saat": "08:30",
+        "tatil_kontrol": True,
+        "otomatik_ekle": True
+    }
+    if os.path.exists(HARCLIK_AYARLARI_DOSYASI):
+        try:
+            with open(HARCLIK_AYARLARI_DOSYASI, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                varsayilan.update(data)
+        except Exception:
+            pass
+    return varsayilan
+
+def harclik_ayarlari_kaydet(ayarlar):
+    try:
+        with open(HARCLIK_AYARLARI_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump(ayarlar, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print("Harçlık ayarları kaydedilemedi:", e)
+
+def okul_gunu_mu(tarih, tatil_kontrol=True):
+    """Okulların açık olduğu haftaiçi günleri tespit eder (MEB Takvimi uyumlu)."""
+    # Haftasonu kontrolü (Cumartesi=5, Pazar=6)
+    if tarih.weekday() >= 5:
+        return False
+    if not tatil_kontrol:
+        return True
+    m, d = tarih.month, tarih.day
+    # Yaz tatili (20 Haziran - 6 Eylül arası okullar kapalı)
+    if (m == 6 and d > 20) or (m in [7, 8]) or (m == 9 and d < 7):
+        return False
+    # 1. Dönem Ara Tatil (9-13 Kasım)
+    if m == 11 and (9 <= d <= 13):
+        return False
+    # Yarıyıl / Sömestr Tatili (18 Ocak - 2 Şubat)
+    if (m == 1 and d >= 18) or (m == 2 and d <= 2):
+        return False
+    # 2. Dönem Ara Tatil (12-16 Nisan)
+    if m == 4 and (12 <= d <= 16):
+        return False
+    # Resmi Tatiller (29 Ekim, 1 Ocak, 23 Nisan, 1 Mayıs, 19 Mayıs)
+    if (m == 10 and d == 29) or (m == 1 and d == 1) or (m == 4 and d == 23) or (m == 5 and d in [1, 19]):
+        return False
+    return True
 
 def oturum_oku():
     if os.path.exists(OTURUM_DOSYASI):
@@ -2973,6 +3024,188 @@ def main(page: ft.Page):
         )
 
 
+        # --- OTOMATİK OKUL HARÇLIĞI MANTIĞI VE AYARLARI ---
+        def otomatik_harclik_tara_ve_ekle(sessiz=True):
+            ayarlar = harclik_ayarlari_oku()
+            if not ayarlar.get("aktif", True) or not ayarlar.get("otomatik_ekle", True):
+                if not sessiz:
+                    show_app_snackbar(page, "Otomatik harçlık sistemi şu anda devre dışı.", color="#64748b")
+                return 0
+
+            cocuk_sayisi = int(ayarlar.get("cocuk_sayisi", 2))
+            birim_harclik = float(ayarlar.get("birim_harclik", 10.0))
+            toplam_tutar = cocuk_sayisi * birim_harclik
+            tatil_kontrol = ayarlar.get("tatil_kontrol", True)
+            saat_val = ayarlar.get("saat", "08:30")
+
+            mevcut_harclik_tarihleri = set()
+            for item in islemler:
+                if item.get("tur") == "Gider" and "okul harçlığı" in (item.get("urun") or "").lower():
+                    t = item.get("tarih")
+                    if t:
+                        mevcut_harclik_tarihleri.add(standart_tarih_yap(t))
+
+            bugun = datetime.date.today()
+            baslangic = secilen_donem_bas[0] if (secilen_donem_bas[0] and secilen_donem_bas[0] <= bugun) else bugun
+            if (bugun - baslangic).days > 45:
+                baslangic = bugun - datetime.timedelta(days=45)
+
+            eklenen_adet = 0
+            gecici_gun = baslangic
+            while gecici_gun <= bugun:
+                std_gun = gecici_gun.strftime("%d.%m.%Y")
+                if std_gun not in mevcut_harclik_tarihleri:
+                    if okul_gunu_mu(gecici_gun, tatil_kontrol=tatil_kontrol):
+                        yeni_kayit = {
+                            "kullanici": kullanici or "Ev Yöneticisi",
+                            "tur": "Gider",
+                            "tarih": std_gun,
+                            "saat": saat_val,
+                            "kaynak": "",
+                            "gelir_turu": "",
+                            "aciklama": "Otomatik Okul Harçlığı",
+                            "firma": "Nakit",
+                            "urun": f"Okul Harçlığı ({cocuk_sayisi} Çocuk)",
+                            "kategori": "Eğitim & Okul",
+                            "miktar": f"{cocuk_sayisi} çocuk",
+                            "birim_fiyat": format_turk_para(birim_harclik),
+                            "tutar": float(toplam_tutar)
+                        }
+
+                        if supabase:
+                            try:
+                                res = supabase.table("islemler").insert(yeni_kayit).execute()
+                                if res and res.data and len(res.data) > 0 and res.data[0].get("id"):
+                                    yeni_kayit["id"] = res.data[0]["id"]
+                            except Exception as db_err:
+                                print("Harçlık Supabase kayıt hatası:", db_err)
+
+                        if "id" not in yeni_kayit:
+                            mevcut_idler = [it.get("id") for it in islemler if isinstance(it.get("id"), int)]
+                            yeni_kayit["id"] = (max(mevcut_idler) + 1) if mevcut_idler else 1
+
+                        islemler.append(yeni_kayit)
+                        mevcut_harclik_tarihleri.add(std_gun)
+                        eklenen_adet += 1
+
+                gecici_gun += datetime.timedelta(days=1)
+
+            if eklenen_adet > 0:
+                arayuzu_guncelle()
+                toplam_eklenen_tl = format_turk_para(eklenen_adet * toplam_tutar)
+                msg = f"🎒 {eklenen_adet} okul günü için toplam {toplam_eklenen_tl} TL harçlık eklendi!"
+                show_app_snackbar(page, msg, color="#10b981")
+            else:
+                if not sessiz:
+                    show_app_snackbar(page, "ℹ️ Eksik okul harçlığı bulunamadı, tüm günler kayıtlı.", color="#2563eb")
+
+            return eklenen_adet
+
+        def harclik_ayarlari_modal_ac(e=None):
+            ayarlar = harclik_ayarlari_oku()
+
+            aktif_switch = ft.Switch(
+                label="Otomatik Harçlık Sistemi Aktif",
+                value=ayarlar.get("aktif", True),
+                active_color="#10b981"
+            )
+
+            cocuk_sayisi_tf = ft.TextField(
+                label="Çocuk Sayısı",
+                value=str(ayarlar.get("cocuk_sayisi", 2)),
+                width=130,
+                keyboard_type=ft.KeyboardType.NUMBER
+            )
+
+            birim_harclik_tf = ft.TextField(
+                label="Çocuk Başı Tutar (TL)",
+                value=format_turk_para(ayarlar.get("birim_harclik", 10.0)),
+                width=150,
+                keyboard_type=ft.KeyboardType.NUMBER
+            )
+
+            tatil_cb = ft.Checkbox(
+                label="Haftasonu ve MEB Tatillerinde Duraklat",
+                value=ayarlar.get("tatil_kontrol", True)
+            )
+
+            onizleme_txt = ft.Text(size=12, weight=ft.FontWeight.BOLD, color="#2563eb")
+
+            def onizleme_guncelle(ev=None):
+                try:
+                    cs = int(cocuk_sayisi_tf.value.strip() or "1")
+                    bh = parse_turk_tutari(birim_harclik_tf.value.strip() or "0")
+                    toplam = cs * bh
+                    onizleme_txt.value = f"💰 Günlük Toplam: {format_turk_para(toplam)} TL ({cs} Çocuk x {format_turk_para(bh)} TL)"
+                except Exception:
+                    onizleme_txt.value = "⚠️ Geçerli bir sayı giriniz."
+                try:
+                    onizleme_txt.update()
+                except Exception:
+                    pass
+
+            cocuk_sayisi_tf.on_change = onizleme_guncelle
+            birim_harclik_tf.on_change = onizleme_guncelle
+            onizleme_guncelle()
+
+            def ayar_kaydet_aksiyon(ev):
+                try:
+                    cs = int(cocuk_sayisi_tf.value.strip() or "2")
+                    bh = parse_turk_tutari(birim_harclik_tf.value.strip() or "10")
+                    yeni_ayarlar = {
+                        "aktif": aktif_switch.value,
+                        "cocuk_sayisi": cs,
+                        "birim_harclik": bh,
+                        "saat": "08:30",
+                        "tatil_kontrol": tatil_cb.value,
+                        "otomatik_ekle": aktif_switch.value
+                    }
+                    harclik_ayarlari_kaydet(yeni_ayarlar)
+                    close_app_dialog(page, harclik_dialog)
+                    show_app_snackbar(page, f"✅ Harçlık ayarları güncellendi (Çocuk Başı: {format_turk_para(bh)} TL)", color="#10b981")
+                except Exception as ex:
+                    show_app_snackbar(page, f"Hata: {ex}", color="#ef4444")
+
+            def eksik_gunleri_ekle_aksiyon(ev):
+                ayar_kaydet_aksiyon(ev)
+                otomatik_harclik_tara_ve_ekle(sessiz=False)
+
+            harclik_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.SCHOOL, color="#f59e0b", size=24),
+                    ft.Text("Otomatik Okul Harçlığı", size=16, weight=ft.FontWeight.BOLD)
+                ], spacing=8),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Text("Okulların açık olduğu haftaiçi günlerde çocuklara otomatik harçlık ekler.", size=11, color="#64748b"),
+                        aktif_switch,
+                        ft.Row([cocuk_sayisi_tf, birim_harclik_tf], spacing=8),
+                        tatil_cb,
+                        ft.Container(
+                            content=onizleme_txt,
+                            bgcolor="#f0f9ff",
+                            border=make_border_all(1, "#bae6fd"),
+                            border_radius=8,
+                            padding=make_padding(8, 8),
+                            alignment=get_alignment_center()
+                        ),
+                        ft.Container(
+                            content=ft.Text("CSV Formatı: GG.AA.YYYY 08:30, Nakit, Okul Harçlığı, Eğitim & Okul", size=10, color="#94a3b8"),
+                            padding=make_padding(0, 2)
+                        )
+                    ], spacing=10, tight=True),
+                    width=320,
+                    padding=4
+                ),
+                actions=[
+                    make_button("⚡ Eksik Günleri Ekle", height=34, bgcolor="#2563eb", color="white", on_click=eksik_gunleri_ekle_aksiyon),
+                    make_button("💾 Kaydet", height=34, bgcolor="#10b981", color="white", on_click=ayar_kaydet_aksiyon),
+                    make_button("✕ Kapat", height=34, outlined=True, on_click=lambda _: close_app_dialog(page, harclik_dialog))
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+            show_app_dialog(page, harclik_dialog)
+
         # --- İSTATİSTİK VE KATEGORİ GRAFİKLERİ PENCERESİ ---
         def istatistik_ac(e=None):
             stat_tum_zamanlar = [tum_zamanlar_modu[0]]
@@ -3189,6 +3422,7 @@ def main(page: ft.Page):
                     )
                 ], spacing=8),
                 ft.Row([
+                    ft.IconButton(icon=ft.Icons.SCHOOL_ROUNDED, icon_size=20, icon_color="#f59e0b", tooltip="🎒 Otomatik Okul Harçlığı Ayarları", on_click=harclik_ayarlari_modal_ac),
                     ft.IconButton(icon=ft.Icons.PIE_CHART_OUTLINE, icon_size=20, icon_color="#2563eb", tooltip="Kategori Grafikleri & İstatistik", on_click=istatistik_ac),
                     ft.IconButton(icon=ft.Icons.LOGOUT, icon_size=18, tooltip="Çıkış Yap", on_click=cikis_yap_aksiyon)
                 ], spacing=2)
@@ -3241,6 +3475,12 @@ def main(page: ft.Page):
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
         )
         arayuzu_guncelle()
+
+        # Uygulama açılışında okulların açık olduğu günleri otomatik kontrol et ve harçlık ekle
+        try:
+            otomatik_harclik_tara_ve_ekle(sessiz=True)
+        except Exception as ex_h_start:
+            print("Açılış otomatik harçlık kontrol hatası:", ex_h_start)
 
     # Oturum Kontrolü
     kayitli_oturum = oturum_oku()
