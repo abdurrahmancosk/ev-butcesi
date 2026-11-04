@@ -1177,16 +1177,17 @@ def main(page: ft.Page):
 
     def on_galeri_secimi_tamamlandi(e):
         if hasattr(e, "files") and e.files and len(e.files) > 0:
-            f = e.files[0]
-            secilen_yol = getattr(f, "path", None)
-            if not secilen_yol and hasattr(f, "bytes") and f.bytes:
-                import tempfile
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                    tf.write(f.bytes)
-                    secilen_yol = tf.name
-            if secilen_yol and os.path.exists(str(secilen_yol)):
-                if fis_analiz_tetikleyici[0]:
-                    fis_analiz_tetikleyici[0](str(secilen_yol))
+            toplu_yollar = []
+            for f in e.files:
+                p = getattr(f, "path", None)
+                if not p and hasattr(f, "bytes") and f.bytes:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
+                        tf.write(f.bytes)
+                        p = tf.name
+                if p and os.path.exists(str(p)):
+                    toplu_yollar.append(str(p))
+            if toplu_yollar and fis_analiz_tetikleyici[0]:
+                fis_analiz_tetikleyici[0](toplu_yollar)
 
     galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
     if hasattr(page, "services"):
@@ -2478,13 +2479,24 @@ def main(page: ft.Page):
                 page.update()
 
         # --- AI FİŞ TARAMA İŞLEMCİSİ (Android + Masaüstü Tam Uyumlu) ---
-        def fis_gorselini_tara_ve_goster(dosya_yolu):
+        def fis_gorselini_tara_ve_goster(dosya_yollari):
             fis_analiz_tetikleyici[0] = fis_gorselini_tara_ve_goster
-            if not dosya_yolu:
+            if not dosya_yollari:
+                return
+
+            # Tek yol geldiyse listeye çevir
+            if isinstance(dosya_yollari, str):
+                yollar_listesi = [dosya_yollari]
+            else:
+                yollar_listesi = list(dosya_yollari)
+
+            if not yollar_listesi:
                 return
 
             iptal_edildi = [False]
-            durum_metni = ft.Text("Görsel hazırlanıyor...", size=12, color="#475569")
+            toplam_adet = len(yollar_listesi)
+            durum_metni = ft.Text(f"Fişler hazırlanıyor (0/{toplam_adet})...", size=12, color="#475569")
+            ilerleme_cubugu = ft.ProgressBar(value=0.0, width=310, color="#2563eb", bgcolor="#e2e8f0")
 
             def yukleme_iptal(ev):
                 iptal_edildi[0] = True
@@ -2493,17 +2505,20 @@ def main(page: ft.Page):
 
             yukleniyor_dialog = ft.AlertDialog(
                 content=ft.Container(
-                    content=ft.Row([
-                        ft.ProgressRing(width=28, height=28, stroke_width=3),
-                        ft.Container(width=12),
-                        ft.Column([
-                            ft.Text("Fiş / Fatura Taranıyor...", weight=ft.FontWeight.BOLD, size=14),
-                            durum_metni
-                        ], spacing=2)
-                    ], alignment=ft.MainAxisAlignment.START),
-                    padding=15,
-                    width=320,
-                    height=75
+                    content=ft.Column([
+                        ft.Row([
+                            ft.ProgressRing(width=26, height=26, stroke_width=3, color="#2563eb"),
+                            ft.Column([
+                                ft.Text(f"📸 {toplam_adet} Adet Fiş Taranıyor..." if toplam_adet > 1 else "📸 Fiş Taranıyor...", weight=ft.FontWeight.BOLD, size=13),
+                                durum_metni
+                            ], spacing=2, expand=True)
+                        ], alignment=ft.MainAxisAlignment.START),
+                        ft.Container(height=4),
+                        ilerleme_cubugu
+                    ], spacing=6, tight=True),
+                    padding=14,
+                    width=330,
+                    height=100
                 ),
                 actions=[
                     make_button("✕ İptal", outlined=True, height=32, on_click=yukleme_iptal)
@@ -2512,96 +2527,114 @@ def main(page: ft.Page):
             )
             show_app_dialog(page, yukleniyor_dialog)
 
-            def status_guncelle(yeni_durum):
+            def status_guncelle(yeni_durum, ilerleme=None):
                 if not iptal_edildi[0]:
                     durum_metni.value = yeni_durum
+                    if ilerleme is not None:
+                        ilerleme_cubugu.value = ilerleme
                     try:
                         page.update()
                     except Exception:
                         pass
 
-            import threading
-
-            def arka_plan_tara():
+            def arka_plan_toplu_tara():
                 try:
-                    sonuc = gemini_fis_analiz_et(dosya_yolu, status_cb=status_guncelle)
+                    tum_sonuclar = []
+                    for idx, y in enumerate(yollar_listesi):
+                        if iptal_edildi[0]:
+                            return
+                        dosya_adi = os.path.basename(y)
+                        status_guncelle(f"Fiş {idx+1}/{toplam_adet}: {dosya_adi[:18]}...", (idx / toplam_adet))
+                        try:
+                            res = gemini_fis_analiz_et(y, status_cb=lambda s: status_guncelle(f"[{idx+1}/{toplam_adet}] {s}"))
+                            if res and "hata" not in res and res.get("urunler"):
+                                tum_sonuclar.append({"dosya": y, "veri": res})
+                            elif res and "hata" in res:
+                                print(f"Fiş {idx+1} hata:", res.get("hata"))
+                        except Exception as ex_f:
+                            print(f"Fiş okuma hatası ({dosya_adi}):", ex_f)
+
+                    status_guncelle("Mükerrer harcama kontrolleri yapılıyor...", 1.0)
 
                     if iptal_edildi[0]:
                         return
 
                     close_app_dialog(page, yukleniyor_dialog)
 
-                    if not sonuc or "hata" in sonuc:
-                        hata_msj = sonuc.get("hata", "Bilinmeyen hata") if sonuc else "Yanıt alınamadı"
-                        hata_dialog = ft.AlertDialog(
-                            title=ft.Text("⚠️ Fiş Okunamadı", size=15, weight=ft.FontWeight.BOLD, color="#b91c1c"),
-                            content=ft.Container(
-                                content=ft.Text(f"Hata Detayı:\n{hata_msj}", size=12),
-                                width=320
-                            ),
-                            actions=[
-                                make_button("Tamam", outlined=True, on_click=lambda _: close_app_dialog(page, hata_dialog))
-                            ]
-                        )
-                        show_app_dialog(page, hata_dialog)
+                    if not tum_sonuclar:
+                        show_app_snackbar(page, "⚠️ Taranan fişlerden geçerli harcama verisi çıkarılamadı.", color="#ef4444")
                         return
 
-                    firma = sonuc.get("firma") or "Market"
-                    tarih = sonuc.get("tarih") or datetime.date.today().strftime("%d.%m.%Y")
-                    saat = sonuc.get("saat") or datetime.datetime.now().strftime("%H:%M")
-                    urunler = sonuc.get("urunler") or []
-                    toplam_tutar = float(sonuc.get("toplam_tutar") or 0.0)
+                    # --- MÜKERRER KONTROLÜ VE ÖZET DERLEME ---
+                    # Her ürünün sistemde (islemler) birebir aynı tarih, saat, firma veya tutarda olup olmadığı kontrol edilir
+                    toplu_urun_kartlari = []
+                    toplu_onay_verileri = []
+                    toplam_okunan_urun = 0
+                    toplam_okunan_tutar = 0.0
+                    toplam_mukerrer_sayisi = 0
+                    tam_mukerrer_fis_sayisi = 0
 
-                    if not urunler:
-                        show_app_snackbar(page, "⚠️ Fişte herhangi bir ürün kalemi tespit edilemedi.", color="#f59e0b")
-                        return
+                    for f_idx, f_item in enumerate(tum_sonuclar):
+                        f_veri = f_item["veri"]
+                        f_firma = f_veri.get("firma") or "Market"
+                        f_tarih = standart_tarih_yap(f_veri.get("tarih"))
+                        f_saat = str(f_veri.get("saat") or "12:00").strip()[:5]
+                        f_urunler = f_veri.get("urunler") or []
+                        f_toplam = float(f_veri.get("toplam_tutar") or 0.0)
 
-                    std_tarih = standart_tarih_yap(tarih)
-                    saat_kisa = str(saat).strip()[:5] if saat else "12:00"
+                        f_mukerrer_sayisi = 0
+                        fis_urun_kontrolleri = []
 
-                    # --- MÜKERRER FİŞ KONTROLÜ (SAAT VE ÜRÜN ANALİZİ) ---
-                    # Özellikle fişin saatinden, tarihinden ve ürün/tutar eşleşmesinden kontrol edilir
-                    mukerrer_eslesmeler = {}
-                    for idx, u in enumerate(urunler):
-                        u_adi_norm = str(u.get("urun") or "").strip().lower()
-                        u_tut = round(float(u.get("tutar") or u.get("birim_fiyat") or 0.0), 2)
-                        for it in islemler:
-                            it_tar = standart_tarih_yap(it.get("tarih"))
-                            it_st = str(it.get("saat", "")).strip()[:5]
-                            it_fir = str(it.get("firma", "")).strip().lower()
-                            it_urn = str(it.get("urun", "")).strip().lower()
-                            it_tut = round(float(it.get("tutar") or 0.0), 2)
-
-                            if it_tar == std_tarih and it_st == saat_kisa:
-                                if (u_adi_norm in it_urn or it_urn in u_adi_norm or firma.lower() in it_fir) and abs(it_tut - u_tut) < 0.05:
-                                    mukerrer_eslesmeler[idx] = it
-                                    break
-
-                    tam_mukerrer = len(mukerrer_eslesmeler) == len(urunler) and len(urunler) > 0
-                    kismi_mukerrer = len(mukerrer_eslesmeler) > 0 and not tam_mukerrer
-
-                    def onay_dialogunu_ac(yine_de_onay=False):
-                        onay_listesi = []
-                        secim_kontrolleri = []
-
-                        for idx, u in enumerate(urunler):
-                            u_adi = u.get("urun") or f"Ürün {idx+1}"
+                        for u_idx, u in enumerate(f_urunler):
+                            u_adi = u.get("urun") or f"Ürün {u_idx+1}"
                             u_miktar = u.get("miktar") or "1 Adet"
                             u_fiyat = float(u.get("birim_fiyat") or u.get("tutar") or 0.0)
                             u_tutar = float(u.get("tutar") or u_fiyat)
-                            u_kat = kategori_akilli_duzelt(u_adi, firma=firma, mevcut_kat=u.get("kategori"))
+                            u_kat = kategori_akilli_duzelt(u_adi, firma=f_firma, mevcut_kat=u.get("kategori"))
                             if u_kat not in GIDER_KATEGORILERI:
                                 u_kat = "Market & Temel Gıda"
 
-                            zaten_kayitli = idx in mukerrer_eslesmeler
-                            # Mükerrer olan ürünlerin işareti varsayılan olarak kaldırılır (çift eklenmesin)
-                            chk_val = False if (zaten_kayitli and not yine_de_onay) else True
-                            rozet = "⚠️ [ZATEN KAYITLI] " if zaten_kayitli else ""
-                            chk_label = f"{rozet}{u_adi} ({u_miktar}) - {u_tutar:,.2f} TL • [{u_kat}]"
+                            toplam_okunan_urun += 1
+                            toplam_okunan_tutar += u_tutar
 
-                            chk = ft.Checkbox(value=chk_val, label=chk_label)
-                            onay_listesi.append({
+                            # Sistemdeki mevcut kayıtlarla mükerrerlik testi
+                            u_adi_norm = u_adi.lower().strip()
+                            u_tut_round = round(u_tutar, 2)
+                            zaten_kayitli = False
+
+                            for it in islemler:
+                                it_tar = standart_tarih_yap(it.get("tarih"))
+                                it_st = str(it.get("saat", "")).strip()[:5]
+                                it_fir = str(it.get("firma", "")).strip().lower()
+                                it_urn = str(it.get("urun", "")).strip().lower()
+                                it_tut = round(float(it.get("tutar") or 0.0), 2)
+
+                                if it_tar == f_tarih and it_st == f_saat:
+                                    if (u_adi_norm in it_urn or it_urn in u_adi_norm or f_firma.lower() in it_fir) and abs(it_tut - u_tut_round) < 0.05:
+                                        zaten_kayitli = True
+                                        break
+
+                            if zaten_kayitli:
+                                f_mukerrer_sayisi += 1
+                                toplam_mukerrer_sayisi += 1
+                                chk_val = False  # Zaten kayıtlı olan ürün varsayılan olarak seçilmez
+                                rozet = "⚠️ [ZATEN KAYITLI] "
+                                label_color = "#b91c1c"
+                            else:
+                                chk_val = True   # Yeni ürün otomatik seçili
+                                rozet = "✨ [YENİ] "
+                                label_color = "#1e293b"
+
+                            chk = ft.Checkbox(
+                                value=chk_val,
+                                label=f"{rozet}{u_adi} ({u_miktar}) - {u_tutar:,.2f} TL • [{u_kat}]"
+                            )
+
+                            toplu_onay_verileri.append({
                                 "chk": chk,
+                                "firma": f_firma,
+                                "tarih": f_tarih,
+                                "saat": f_saat,
                                 "urun": u_adi,
                                 "miktar": u_miktar,
                                 "birim_fiyat": u_fiyat,
@@ -2609,186 +2642,149 @@ def main(page: ft.Page):
                                 "kategori": u_kat,
                                 "mukerrer": zaten_kayitli
                             })
-                            secim_kontrolleri.append(chk)
+                            fis_urun_kontrolleri.append(chk)
 
-                        def dialog_kapat(ev):
-                            close_app_dialog(page, fis_dialog)
+                        bu_fis_tam_mukerrer = (f_mukerrer_sayisi == len(f_urunler) and len(f_urunler) > 0)
+                        if bu_fis_tam_mukerrer:
+                            tam_mukerrer_fis_sayisi += 1
 
-                        def secilenleri_ekle(ev):
-                            eklenen_sayisi = 0
-                            eklenen_tutar = 0.0
-                            simdi_ts = int(datetime.datetime.now().timestamp() * 1000)
+                        # Fiş kartı başlığı ve ürünleri
+                        fis_durum_rozet = "⚠️ TÜMÜ ZATEN KAYITLI" if bu_fis_tam_mukerrer else (f"⚠️ {f_mukerrer_sayisi} Mükerrer" if f_mukerrer_sayisi > 0 else "✨ Tüm Ürünler Yeni")
+                        fis_rozet_bg = "#fef2f2" if bu_fis_tam_mukerrer else ("#fffbeb" if f_mukerrer_sayisi > 0 else "#ecfdf5")
+                        fis_rozet_color = "#b91c1c" if bu_fis_tam_mukerrer else ("#b45309" if f_mukerrer_sayisi > 0 else "#047857")
 
-                            fis_date_obj = stringden_tarih_al(std_tarih)
-                            if fis_date_obj:
-                                if not (secilen_donem_bas[0] <= fis_date_obj <= secilen_donem_bit[0]):
-                                    p_bas, p_bit = aktif_butce_donemini_bul(fis_date_obj)
-                                    secilen_donem_bas[0] = p_bas
-                                    secilen_donem_bit[0] = p_bit
-                                    tum_zamanlar_modu[0] = False
-
-                            harcayan_hesap = "Hatice" if (not yonetici_mi or kullanici == "Hatice") else "Abdurrahman"
-
-                            for item_idx, itm in enumerate(onay_listesi):
-                                if itm["chk"].value:
-                                    yeni_kayit = {
-                                        "kullanici": harcayan_hesap,
-                                        "tur": "Gider",
-                                        "tarih": std_tarih,
-                                        "saat": saat,
-                                        "kaynak": "",
-                                        "gelir_turu": "",
-                                        "aciklama": f"AI Fiş ({firma})",
-                                        "firma": firma,
-                                        "urun": itm["urun"],
-                                        "kategori": itm["kategori"],
-                                        "miktar": itm["miktar"],
-                                        "birim_fiyat": itm["birim_fiyat"],
-                                        "tutar": itm["tutar"]
-                                    }
-
-                                    if supabase:
-                                        try:
-                                            res = supabase.table("islemler").insert(yeni_kayit).execute()
-                                            if res and res.data and len(res.data) > 0 and res.data[0].get("id"):
-                                                yeni_kayit["id"] = int(res.data[0]["id"])
-                                        except Exception as db_err:
-                                            print("Supabase fiş kayıt hatası:", db_err)
-
-                                    if "id" not in yeni_kayit:
-                                        mevcut_idler = [int(it.get("id")) for it in islemler if str(it.get("id", "")).isdigit()]
-                                        yeni_kayit["id"] = (max(mevcut_idler) + 1 + item_idx) if mevcut_idler else (item_idx + 1)
-
-                                    islemler.insert(0, yeni_kayit)
-                                    eklenen_sayisi += 1
-                                    eklenen_tutar += itm["tutar"]
-
-                            dialog_kapat(None)
-
-                            secilen_filtre[0] = "Tümü"
-                            secilen_kategori[0] = "Tüm Kategoriler"
-                            if hasattr(kategori_filtre_dropdown, "value"):
-                                kategori_filtre_dropdown.value = "Tüm Kategoriler"
-
-                            arayuzu_guncelle()
-                            try:
-                                liste_arayuzu.update()
-                            except Exception:
-                                pass
-
-                            show_app_snackbar(
-                                page,
-                                f"✅ {firma} fişinden {eklenen_sayisi} kalem harcama ({eklenen_tutar:,.2f} TL) bütçeye eklendi!",
-                                color="#16a34a"
-                            )
-
-                        dialog_icerik_kolon = [
-                            ft.Text(f"Toplam: {toplam_tutar:,.2f} TL • {len(urunler)} Kalem Tespit Edildi", size=12, color="#475569", weight=ft.FontWeight.W_500),
-                        ]
-
-                        if kismi_mukerrer:
-                            dialog_icerik_kolon.append(
-                                ft.Container(
-                                    content=ft.Row([
-                                        ft.Icon(ft.Icons.WARNING_AMBER, color="#b91c1c", size=16),
-                                        ft.Text(f"⚠️ {len(mukerrer_eslesmeler)} ürün sistemde zaten kayıtlı olduğu için işareti kaldırıldı.", size=10, color="#b91c1c", weight=ft.FontWeight.W_600, expand=True)
-                                    ], spacing=4),
-                                    bgcolor="#fef2f2",
-                                    border=make_border_all(1, "#fecaca"),
-                                    border_radius=6,
-                                    padding=6
-                                )
-                            )
-                        elif tam_mukerrer:
-                            dialog_icerik_kolon.append(
-                                ft.Container(
-                                    content=ft.Row([
-                                        ft.Icon(ft.Icons.WARNING_ROUNDED, color="#b91c1c", size=16),
-                                        ft.Text("⚠️ Bu fiş sistemde zaten kayıtlı! Eklemek istediklerinizi seçiniz.", size=10, color="#b91c1c", weight=ft.FontWeight.BOLD, expand=True)
-                                    ], spacing=4),
-                                    bgcolor="#fef2f2",
-                                    border=make_border_all(1, "#fecaca"),
-                                    border_radius=6,
-                                    padding=6
-                                )
-                            )
-
-                        dialog_icerik_kolon.extend([
-                            ft.Text("Eklemek istediğiniz ürünleri seçin:", size=11, color="grey"),
-                            ft.Container(
-                                content=ft.Column(secim_kontrolleri, scroll=ft.ScrollMode.AUTO, spacing=2),
-                                height=220,
-                                border=make_border_all(1, "#e2e8f0"),
-                                border_radius=8,
-                                padding=4
-                            )
-                        ])
-
-                        fis_dialog = ft.AlertDialog(
-                            title=ft.Text(f"📸 {firma} ({tarih} {saat_kisa})", size=16, weight=ft.FontWeight.BOLD),
-                            content=ft.Container(
-                                content=ft.Column(dialog_icerik_kolon, spacing=6),
-                                width=330,
-                                height=310
-                            ),
-                            actions=[
-                                make_button("İptal", outlined=True, on_click=dialog_kapat),
-                                make_button("✅ Bütçeye Ekle", bgcolor="#16a34a", color="white", on_click=secilenleri_ekle)
-                            ],
-                            actions_alignment=ft.MainAxisAlignment.END
-                        )
-                        show_app_dialog(page, fis_dialog)
-
-                    # Eğer fişteki tüm ürünler sistemde birebir kayıtlıysa, doğrudan mükerrerlik uyarı penceresi aç
-                    if tam_mukerrer:
-                        def mukerrer_yine_de_ac(ev):
-                            close_app_dialog(page, mukerrer_uyari_dlg)
-                            onay_dialogunu_ac(yine_de_onay=True)
-
-                        mukerrer_uyari_dlg = ft.AlertDialog(
-                            title=ft.Row([
-                                ft.Icon(ft.Icons.WARNING_ROUNDED, color="#dc2626", size=26),
-                                ft.Text("Mükerrer Fiş Uyarısı!", size=16, weight=ft.FontWeight.BOLD, color="#b91c1c")
-                            ], spacing=8),
-                            content=ft.Container(
-                                content=ft.Column([
-                                    ft.Text("⚠️ Bu fiş sistemde zaten kayıtlı görünüyor!", weight=ft.FontWeight.BOLD, size=13, color="#1e293b"),
+                        kart = ft.Container(
+                            content=ft.Column([
+                                ft.Row([
+                                    ft.Column([
+                                        ft.Text(f"🧾 {f_firma}", size=12, weight=ft.FontWeight.BOLD, color="#1e293b"),
+                                        ft.Text(f"📅 {f_tarih} 🕒 {f_saat} • {f_toplam:,.2f} TL", size=10, color="#64748b")
+                                    ], spacing=1, expand=True),
                                     ft.Container(
-                                        content=ft.Column([
-                                            ft.Text(f"📍 Firma: {firma}", size=11, weight=ft.FontWeight.W_600),
-                                            ft.Text(f"📅 Tarih: {std_tarih} | 🕒 Saat: {saat_kisa}", size=11, weight=ft.FontWeight.W_600),
-                                            ft.Text(f"💰 Tutar: {toplam_tutar:,.2f} TL ({len(urunler)} ürün)", size=11, weight=ft.FontWeight.W_600, color="#b91c1c")
-                                        ], spacing=2),
-                                        bgcolor="#fef2f2",
-                                        border=make_border_all(1, "#fecaca"),
-                                        border_radius=8,
-                                        padding=8
-                                    ),
-                                    ft.Text(f"Fişin saati ({saat_kisa}), tarihi ({std_tarih}) ve {len(urunler)} adet ürünü incelendiğinde bu fişin sisteme daha önce eksiksiz eklendiği tespit edildi.\n\nMükerrer kayıt ve çift harcama oluşmaması için fişi tekrar eklememeniz önerilir.", size=11, color="#475569")
-                                ], spacing=8, tight=True),
-                                width=330,
-                                padding=2
-                            ),
-                            actions=[
-                                make_button("✕ Vazgeç / Ekleme", height=36, outlined=True, on_click=lambda _: close_app_dialog(page, mukerrer_uyari_dlg)),
-                                make_button("⚠️ Yine de İncele & Ekle", height=36, bgcolor="#dc2626", color="white", on_click=mukerrer_yine_de_ac)
-                            ],
-                            actions_alignment=ft.MainAxisAlignment.END
+                                        content=ft.Text(fis_durum_rozet, size=9.5, weight=ft.FontWeight.BOLD, color=fis_rozet_color),
+                                        bgcolor=fis_rozet_bg,
+                                        padding=make_padding(6, 2),
+                                        border_radius=6
+                                    )
+                                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                                ft.Divider(height=4, color="#e2e8f0"),
+                                ft.Column(fis_urun_kontrolleri, spacing=2)
+                            ], spacing=4),
+                            bgcolor="#f8fafc",
+                            border=make_border_all(1, "#cbd5e1" if not bu_fis_tam_mukerrer else "#fca5a5"),
+                            border_radius=8,
+                            padding=8
                         )
-                        show_app_dialog(page, mukerrer_uyari_dlg)
-                        return
+                        toplu_urun_kartlari.append(kart)
 
-                    # Normal veya kısmi mükerrer durumda doğrudan onay penceresini aç
-                    onay_dialogunu_ac(yine_de_onay=False)
+                    # Onay ve Ekleme Fonksiyonu
+                    def toplu_secilenleri_ekle(ev):
+                        eklenen_adet = 0
+                        eklenen_toplam = 0.0
+                        simdi_ts = int(datetime.datetime.now().timestamp() * 1000)
+
+                        harcayan_hesap = "Hatice" if (not yonetici_mi or kullanici == "Hatice") else "Abdurrahman"
+
+                        for itm_idx, itm in enumerate(toplu_onay_verileri):
+                            if itm["chk"].value:
+                                std_tar = itm["tarih"]
+                                yeni_kayit = {
+                                    "kullanici": harcayan_hesap,
+                                    "tur": "Gider",
+                                    "tarih": std_tar,
+                                    "saat": itm["saat"],
+                                    "kaynak": "",
+                                    "gelir_turu": "",
+                                    "aciklama": f"AI Toplu Fiş ({itm['firma']})",
+                                    "firma": itm["firma"],
+                                    "urun": itm["urun"],
+                                    "kategori": itm["kategori"],
+                                    "miktar": itm["miktar"],
+                                    "birim_fiyat": itm["birim_fiyat"],
+                                    "tutar": itm["tutar"]
+                                }
+
+                                if supabase:
+                                    try:
+                                        res = supabase.table("islemler").insert(yeni_kayit).execute()
+                                        if res and res.data and len(res.data) > 0 and res.data[0].get("id"):
+                                            yeni_kayit["id"] = int(res.data[0]["id"])
+                                    except Exception as db_err:
+                                        print("Supabase toplu fiş kayıt hatası:", db_err)
+
+                                if "id" not in yeni_kayit:
+                                    mevcut_idler = [int(it.get("id")) for it in islemler if str(it.get("id", "")).isdigit()]
+                                    yeni_kayit["id"] = (max(mevcut_idler) + 1 + itm_idx) if mevcut_idler else (itm_idx + 1)
+
+                                islemler.insert(0, yeni_kayit)
+                                eklenen_adet += 1
+                                eklenen_toplam += itm["tutar"]
+
+                        close_app_dialog(page, toplu_fis_dialog)
+
+                        # Otomatik tüm zamanlar ve tüm kategorilere al
+                        secilen_filtre[0] = "Tümü"
+                        secilen_kategori[0] = "Tüm Kategoriler"
+                        tum_zamanlar_modu[0] = True
+                        if hasattr(kategori_filtre_dropdown, "value"):
+                            kategori_filtre_dropdown.value = "Tüm Kategoriler"
+
+                        arayuzu_guncelle()
+                        try:
+                            liste_arayuzu.update()
+                        except Exception:
+                            pass
+
+                        show_app_snackbar(
+                            page,
+                            f"✅ {len(tum_sonuclar)} fişten seçilen {eklenen_adet} harcama ({eklenen_toplam:,.2f} TL) bütçenize eklendi!",
+                            color="#16a34a"
+                        )
+
+                    # Dialog İçeriği Oluşturma
+                    yeni_urun_sayisi = toplam_okunan_urun - toplam_mukerrer_sayisi
+                    ozet_bilgi_metni = (
+                        f"📊 {len(tum_sonuclar)} fişte toplam {toplam_okunan_urun} ürün ({toplam_okunan_tutar:,.2f} TL) bulundu.\n"
+                        f"✨ {yeni_urun_sayisi} yeni ürün seçili • ⚠️ {toplam_mukerrer_sayisi} mükerrer ürünün işareti kaldırıldı."
+                    )
+
+                    toplu_fis_dialog = ft.AlertDialog(
+                        title=ft.Row([
+                            ft.Icon(ft.Icons.RECEIPT_LONG, color="#2563eb", size=24),
+                            ft.Text(f"Toplu Fiş İnceleme ({len(tum_sonuclar)} Fiş)", size=15, weight=ft.FontWeight.BOLD)
+                        ], spacing=8),
+                        content=ft.Container(
+                            content=ft.Column([
+                                ft.Container(
+                                    content=ft.Text(ozet_bilgi_metni, size=11, color="#1e293b", weight=ft.FontWeight.W_500),
+                                    bgcolor="#f1f5f9",
+                                    border=make_border_all(1, "#cbd5e1"),
+                                    border_radius=8,
+                                    padding=8
+                                ),
+                                ft.Container(
+                                    content=ft.Column(toplu_urun_kartlari, scroll=ft.ScrollMode.AUTO, spacing=8),
+                                    height=300,
+                                    padding=2
+                                )
+                            ], spacing=8),
+                            width=345,
+                            height=380
+                        ),
+                        actions=[
+                            make_button("✕ İptal", height=34, outlined=True, on_click=lambda _: close_app_dialog(page, toplu_fis_dialog)),
+                            make_button("✅ Seçilenleri Bütçeye Ekle", height=34, bgcolor="#16a34a", color="white", on_click=toplu_secilenleri_ekle)
+                        ],
+                        actions_alignment=ft.MainAxisAlignment.END
+                    )
+                    show_app_dialog(page, toplu_fis_dialog)
 
                 except Exception as th_err:
-                    print("Arka plan tarama hatası:", th_err)
+                    print("Toplu arka plan tarama hatası:", th_err)
                     close_app_dialog(page, yukleniyor_dialog)
-                    show_app_snackbar(page, f"Tarama sırasında beklenmeyen hata: {th_err}", color="#ef4444")
+                    show_app_snackbar(page, f"Tarama sırasında hata oluştu: {th_err}", color="#ef4444")
 
-            threading.Thread(target=arka_plan_tara, daemon=True).start()
-
-        # Fiş analiz motorunu global seçiciye hemen bağla
+            threading.Thread(target=arka_plan_toplu_tara, daemon=True).start()        # Fiş analiz motorunu global seçiciye hemen bağla
         fis_analiz_tetikleyici[0] = fis_gorselini_tara_ve_goster
 
         # --- %100 HATASIZ VE KESİN FİŞ TARAMA MERKEZİ ---
@@ -2816,10 +2812,10 @@ def main(page: ft.Page):
                 close_app_dialog(page, fis_dialog)
                 fis_gorselini_tara_ve_goster(dosya_yolu)
 
-            # Galeri ve Dosya Seçici Tetikleme (Masaüstünde Doğrudan Tkinter, Mobilde FilePicker)
+            # Galeri ve Dosya Seçici Tetikleme (Toplu Fiş Seçimi - Hem PC hem Mobil)
             def galeri_tiklandi_aksiyon(ev=None):
                 close_app_dialog(page, fis_dialog)
-                show_app_snackbar(page, "📂 Fiş / Belge seçici açılıyor...", color="#2563eb")
+                show_app_snackbar(page, "📂 Fiş seçici açılıyor (Birden fazla seçebilirsiniz)...", color="#2563eb")
 
                 if not platform_mobil_mi():
                     try:
@@ -2828,22 +2824,24 @@ def main(page: ft.Page):
                         root = tk.Tk()
                         root.withdraw()
                         root.attributes("-topmost", True)
-                        dy = filedialog.askopenfilename(
-                            title="Fiş / Fatura Görseli Seçin",
+                        dy_list = filedialog.askopenfilenames(
+                            title="Bir veya Birden Fazla Fiş Görseli Seçin",
                             filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
                         )
                         root.destroy()
-                        if dy and os.path.exists(dy):
-                            fis_gorselini_tara_ve_goster(dy)
-                            return
+                        if dy_list:
+                            gecerli_yollar = [y for y in dy_list if os.path.exists(y)]
+                            if gecerli_yollar:
+                                fis_gorselini_tara_ve_goster(gecerli_yollar)
+                                return
                     except Exception as ex_tk:
-                        print("Tkinter seçici uyarısı:", ex_tk)
+                        print("Tkinter çoklu seçici uyarısı:", ex_tk)
 
-                # Mobilde hazır galeri_picker servisini tetikle
+                # Mobilde hazır galeri_picker servisini çoklu seçimle tetikle
                 try:
                     res = galeri_picker.pick_files(
-                        dialog_title="Fiş / Fatura Görseli Seçin",
-                        allow_multiple=False,
+                        dialog_title="Fişleri Seçin (Çoklu Seçim Destekli)",
+                        allow_multiple=True,
                         with_data=True
                     )
                     if asyncio.iscoroutine(res):
@@ -2851,14 +2849,17 @@ def main(page: ft.Page):
                             try:
                                 files = await res
                                 if files and len(files) > 0:
-                                    f = files[0]
-                                    p = getattr(f, "path", None)
-                                    if not p and hasattr(f, "bytes") and f.bytes:
-                                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                                            tf.write(f.bytes)
-                                            p = tf.name
-                                    if p and os.path.exists(str(p)):
-                                        fis_gorselini_tara_ve_goster(str(p))
+                                    yollar = []
+                                    for f in files:
+                                        p = getattr(f, "path", None)
+                                        if not p and hasattr(f, "bytes") and f.bytes:
+                                            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
+                                                tf.write(f.bytes)
+                                                p = tf.name
+                                        if p and os.path.exists(str(p)):
+                                            yollar.append(str(p))
+                                    if yollar:
+                                        fis_gorselini_tara_ve_goster(yollar)
                             except Exception as ex_coro:
                                 print("Await picker hatası:", ex_coro)
 
@@ -2909,7 +2910,7 @@ def main(page: ft.Page):
 
             dialog_icerik = [
                 make_button(
-                    "📁 Bilgisayardan / Galeriden Fiş Seç",
+                    "📁 Fişleri Seç (Tekli veya Çoklu Toplu Seçim)",
                     icon=ft.Icons.PHOTO_LIBRARY,
                     bgcolor="#2563eb",
                     color="white",
