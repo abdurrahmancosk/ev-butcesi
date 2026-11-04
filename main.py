@@ -1689,29 +1689,8 @@ def main(page: ft.Page):
                 page.update()
 
         
-        # --- AI FİŞ TARAMA İŞLEMCİSİ ---
-        def fis_tara_tiklandi(e):
-            dosya_yolu = None
-            try:
-                import tkinter as tk
-                from tkinter import filedialog
-                root = tk.Tk()
-                root.withdraw()
-                root.attributes("-topmost", True)
-                dosya_yolu = filedialog.askopenfilename(
-                    title="Fiş / Fatura Görseli veya PDF Seçin",
-                    filetypes=[
-                        ("Fiş ve Fatura Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"),
-                        ("PDF Faturalar", "*.pdf"),
-                        ("Resim Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic"),
-                        ("Tüm Dosyalar", "*.*")
-                    ]
-                )
-                root.destroy()
-            except Exception as ex:
-                show_app_snackbar(page, f"Dosya seçici açılamadı: {ex}", color="#ef4444")
-                return
-
+        # --- AI FİŞ TARAMA İŞLEMCİSİ (Android + Masaüstü Tam Uyumlu) ---
+        def fis_gorselini_tara_ve_goster(dosya_yolu):
             if not dosya_yolu:
                 return
 
@@ -1723,7 +1702,6 @@ def main(page: ft.Page):
                 close_app_dialog(page, yukleniyor_dialog)
                 show_app_snackbar(page, "Fiş tarama işlemi iptal edildi.", color="#64748b")
 
-            # Ekranda canlı durum gösteren yükleniyor kutusu
             yukleniyor_dialog = ft.AlertDialog(
                 content=ft.Container(
                     content=ft.Row([
@@ -1823,7 +1801,6 @@ def main(page: ft.Page):
                         std_tarih = standart_tarih_yap(tarih)
                         fis_date_obj = stringden_tarih_al(std_tarih)
 
-                        # Eğer fişin tarihi mevcut seçili dönemin dışındaysa, dönemi otomatik fişin dönemine geçir:
                         if fis_date_obj:
                             if not (secilen_donem_bas[0] <= fis_date_obj <= secilen_donem_bit[0]):
                                 p_bas, p_bit = aktif_butce_donemini_bul(fis_date_obj)
@@ -1863,7 +1840,6 @@ def main(page: ft.Page):
 
                         dialog_kapat(None)
 
-                        # Filtreleri sıfırla ki yeni eklenen harcamalar filtrelere takılmadan hemen görünsün
                         secilen_filtre[0] = "Tümü"
                         secilen_kategori[0] = "Tüm Kategoriler"
                         if hasattr(kategori_filtre_dropdown, "value"):
@@ -1909,6 +1885,74 @@ def main(page: ft.Page):
                     show_app_snackbar(page, f"Tarama sırasında beklenmeyen hata: {th_err}", color="#ef4444")
 
             threading.Thread(target=arka_plan_tara, daemon=True).start()
+
+        # Android & Mobil için FilePicker Tanımı
+        def mobil_dosya_secildi(e):
+            if e.files and len(e.files) > 0:
+                secilen_dosya = e.files[0].path
+                if secilen_dosya:
+                    fis_gorselini_tara_ve_goster(secilen_dosya)
+
+        mobil_file_picker = ft.FilePicker(on_result=mobil_dosya_secildi)
+        if hasattr(page, "overlay"):
+            page.overlay.append(mobil_file_picker)
+            try:
+                page.update()
+            except Exception:
+                pass
+
+        def fis_tara_tiklandi(e):
+            # 1. Önce mobil / Android ortamı kontrol et (tkinter yoksa FilePicker aç)
+            mobil_mi = False
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+            except Exception:
+                mobil_mi = True
+
+            if mobil_mi:
+                try:
+                    mobil_file_picker.pick_files(
+                        dialog_title="Fiş / Fatura Fotoğrafı Seçin",
+                        file_type=ft.FilePickerFileType.IMAGE,
+                        allowed_extensions=["jpg", "jpeg", "png", "webp", "pdf", "heic"]
+                    )
+                    return
+                except Exception as ex_mob:
+                    print("Mobil dosya seçici hatası:", ex_mob)
+
+            # 2. Masaüstü (Windows / Mac) ortamı için Tkinter dosya seçici
+            dosya_yolu = None
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk()
+                root.withdraw()
+                root.attributes("-topmost", True)
+                dosya_yolu = filedialog.askopenfilename(
+                    title="Fiş / Fatura Görseli veya PDF Seçin",
+                    filetypes=[
+                        ("Fiş ve Fatura Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"),
+                        ("PDF Faturalar", "*.pdf"),
+                        ("Resim Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic"),
+                        ("Tüm Dosyalar", "*.*")
+                    ]
+                )
+                root.destroy()
+            except Exception as ex:
+                # Masaüstünde tkinter başarısız olursa yine mobil filepicker dene
+                try:
+                    mobil_file_picker.pick_files(
+                        dialog_title="Fiş / Fatura Fotoğrafı Seçin",
+                        file_type=ft.FilePickerFileType.IMAGE
+                    )
+                    return
+                except Exception:
+                    show_app_snackbar(page, f"Dosya seçici açılamadı: {ex}", color="#ef4444")
+                    return
+
+            if dosya_yolu:
+                fis_gorselini_tara_ve_goster(dosya_yolu)
 
         def csv_yukle_tiklandi(e):
             dosya_yolu = None
