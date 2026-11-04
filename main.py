@@ -2195,28 +2195,8 @@ def main(page: ft.Page):
 
             threading.Thread(target=arka_plan_tara, daemon=True).start()
 
-                # --- %100 HATASIZ FİŞ TARAMA MERKEZİ (FILEPICKER BAĞIMSIZ, SIFIR HATA) ---
+                        # --- %100 HATASIZ VE KESİN FİŞ TARAMA MERKEZİ ---
         def fis_tara_tiklandi(e=None):
-            # Masaüstünde doğrudan Tkinter dosya seçici aç
-            if not platform_mobil_mi():
-                try:
-                    import tkinter as tk
-                    from tkinter import filedialog
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.attributes("-topmost", True)
-                    dy = filedialog.askopenfilename(
-                        title="Fiş / Fatura Görseli veya PDF Seçin",
-                        filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
-                    )
-                    root.destroy()
-                    if dy and os.path.exists(dy):
-                        fis_gorselini_tara_ve_goster(dy)
-                        return
-                except Exception:
-                    pass
-
-            # Mobilde veya alternatif: Telefon galerisi son fotoğrafları ve akıllı tarama merkezi
             son_fotolar = son_gorselleri_bul(limit=6)
 
             metin_alani = ft.TextField(
@@ -2238,6 +2218,61 @@ def main(page: ft.Page):
             def secilen_yolu_tara(dosya_yolu):
                 close_app_dialog(page, fis_dialog)
                 fis_gorselini_tara_ve_goster(dosya_yolu)
+
+            # 1. Galeri / Dosya Seçici Aksiyonu (Hem Mobil Hem Masaüstü)
+            def sistem_galeri_ac(ev=None):
+                close_app_dialog(page, fis_dialog)
+                show_app_snackbar(page, "📂 Galeri / Dosya seçici açılıyor...", color="#2563eb")
+
+                if not platform_mobil_mi():
+                    try:
+                        import tkinter as tk
+                        from tkinter import filedialog
+                        root = tk.Tk()
+                        root.withdraw()
+                        root.attributes("-topmost", True)
+                        dy = filedialog.askopenfilename(
+                            title="Fiş / Fatura Görseli Seçin",
+                            filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
+                        )
+                        root.destroy()
+                        if dy and os.path.exists(dy):
+                            fis_gorselini_tara_ve_goster(dy)
+                            return
+                    except Exception:
+                        pass
+
+                # Mobilde bağımsız servis olarak FilePicker çağır (overlay OLMADAN)
+                async def _mobil_pick_task():
+                    try:
+                        picker = ft.FilePicker()
+                        res = picker.pick_files(
+                            dialog_title="Fiş Görseli Seçin",
+                            allow_multiple=False,
+                            with_data=True
+                        )
+                        if asyncio.iscoroutine(res):
+                            files = await res
+                        else:
+                            files = res
+                        if files and len(files) > 0:
+                            f = files[0]
+                            p = getattr(f, "path", None)
+                            if not p and hasattr(f, "bytes") and f.bytes:
+                                import tempfile
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
+                                    tf.write(f.bytes)
+                                    p = tf.name
+                            if p and os.path.exists(str(p)):
+                                fis_gorselini_tara_ve_goster(str(p))
+                    except Exception as ex_p:
+                        show_app_snackbar(page, f"Seçici hatası: {ex_p}", color="#ef4444")
+
+                if hasattr(page, "run_task"):
+                    page.run_task(_mobil_pick_task)
+                else:
+                    import threading
+                    threading.Thread(target=lambda: asyncio.run(_mobil_pick_task()), daemon=True).start()
 
             def metin_coz_tetikle(ev):
                 raw = metin_alani.value.strip()
@@ -2280,7 +2315,19 @@ def main(page: ft.Page):
 
             dialog_icerik = []
 
-            # Eğer anahtar kayıtlı değilse en üstte dikkat çekici uyarı kutusu göster
+            # 1. EN BAŞTA: Herkese açık büyük, mavi Galeri / Dosya Seçici Butonu!
+            dialog_icerik.append(
+                make_button(
+                    "📁 Telefon Galerisinden / Dosyalardan Seç",
+                    icon=ft.Icons.PHOTO_LIBRARY,
+                    bgcolor="#2563eb",
+                    color="white",
+                    height=42,
+                    on_click=sistem_galeri_ac
+                )
+            )
+
+            # Eğer anahtar kayıtlı değilse uyarı kutusu göster
             if not aktif_key:
                 dialog_icerik.append(
                     ft.Container(
@@ -2289,7 +2336,7 @@ def main(page: ft.Page):
                                 ft.Icon(ft.Icons.KEY, color="#f59e0b", size=18),
                                 ft.Text("Gemini API Anahtarı Gerekli", weight=ft.FontWeight.BOLD, size=12, color="#92400e")
                             ], spacing=6),
-                            ft.Text("Google, GitHub'daki eski anahtarı güvenlik nedeniyle iptal etti. Google AI Studio'dan 10 saniyede ücretsiz yeni bir anahtar alıp buraya yapıştırın:", size=10, color="#78350f"),
+                            ft.Text("Google AI Studio'dan aldığınız ücretsiz anahtarı buraya yapıştırın:", size=10, color="#78350f"),
                             api_key_tf,
                             make_button("💾 Anahtarı Güvenle Kaydet", bgcolor="#f59e0b", color="white", height=30, on_click=api_keyi_kaydet_aksiyon)
                         ], spacing=6),
@@ -2300,17 +2347,9 @@ def main(page: ft.Page):
                     )
                 )
 
-            dialog_icerik.append(
-                ft.Container(
-                    content=ft.Row([
-                        ft.Icon(ft.Icons.INFO_OUTLINE, size=14, color="#64748b"),
-                        ft.Text("Kamerayla çektiğiniz fişler otomatik listelenir:", size=11, color="#64748b")
-                    ], spacing=4),
-                    padding=make_padding(0, 2)
-                )
-            )
+            dialog_icerik.append(ft.Divider(height=10, color="#e2e8f0"))
 
-            # 1. Telefon Galerisindeki Son Fotoğraflar (Kamerayla yeni çekilenler)
+            # 2. Telefon Galerisindeki Son Fotoğraflar (Kameradan)
             if son_fotolar:
                 foto_kartlari = []
                 for foto in son_fotolar:
@@ -2337,22 +2376,10 @@ def main(page: ft.Page):
                     ft.Column([
                         ft.Row([
                             ft.Icon(ft.Icons.AUTO_AWESOME, color="#f59e0b", size=16),
-                            ft.Text("Galeri / Kamera Fotoğrafları:", weight=ft.FontWeight.BOLD, size=12, color="#1e293b")
+                            ft.Text("Algılanan Son Kamera Fotoğrafları:", weight=ft.FontWeight.BOLD, size=12, color="#1e293b")
                         ], spacing=4),
                         *foto_kartlari
                     ], spacing=4)
-                )
-            else:
-                dialog_icerik.append(
-                    ft.Container(
-                        content=ft.Column([
-                            ft.Icon(ft.Icons.PHOTO_CAMERA_OUTLINED, size=28, color="#8b5cf6"),
-                            ft.Text("Henüz fotoğraf bulunamadı.", size=12, weight=ft.FontWeight.BOLD),
-                            ft.Text("Telefonunuzun kamerasıyla fişin fotoğrafını çekip bu pencereyi tekrar açın; fotoğrafınız burada belirecektir.", size=10, color="#64748b", text_align=ft.TextAlign.CENTER)
-                        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4),
-                        padding=10,
-                        alignment=get_alignment_center()
-                    )
                 )
 
             # Metin ve Manuel Yol Seçenekleri
@@ -2388,7 +2415,7 @@ def main(page: ft.Page):
                 content=ft.Container(
                     content=ft.Column(dialog_icerik, spacing=8, scroll=ft.ScrollMode.AUTO),
                     width=330,
-                    height=400,
+                    height=420,
                     padding=2
                 ),
                 actions=[
