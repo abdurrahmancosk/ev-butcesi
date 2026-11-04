@@ -1,8 +1,18 @@
+import asyncio
 import csv
 import datetime
 import io
 import json
 import os
+import re
+import ssl
+import sys
+import tempfile
+import threading
+import time
+import types
+import urllib.parse
+import urllib.request
 import flet as ft
 
 # ==============================================================================
@@ -854,20 +864,23 @@ def aktif_butce_donemini_bul(ref_tarih=None):
 def standart_tarih_yap(tarih_str):
     """Her türlü tarih formatını (YYYY-MM-DD, DD/MM/YYYY, DD.MM.YYYY) GG.AA.YYYY formatına çevirir."""
     if not tarih_str:
-        return datetime.date.today().strftime("%d.%m.%Y")
+        return None
     t_clean = str(tarih_str).split(" ")[0].strip()
     for sep in ["-", "/", "."]:
         if sep in t_clean:
             parts = t_clean.split(sep)
             if len(parts) == 3:
                 try:
+                    p0 = int(parts[0])
+                    p1 = int(parts[1])
+                    p2 = int(parts[2])
                     if len(parts[0]) == 4:
-                        return f"{int(parts[2]):02d}.{int(parts[1]):02d}.{int(parts[0])}"
+                        return f"{p2:02d}.{p1:02d}.{p0:04d}"
                     else:
-                        return f"{int(parts[0]):02d}.{int(parts[1]):02d}.{int(parts[2])}"
+                        return f"{p0:02d}.{p1:02d}.{p2:04d}"
                 except Exception:
                     pass
-    return datetime.date.today().strftime("%d.%m.%Y")
+    return None
 
 def stringden_tarih_al(tarih_str):
     """Metin halindeki tarihi her formattan datetime.date nesnesine güvenle çevirir."""
@@ -875,6 +888,8 @@ def stringden_tarih_al(tarih_str):
         return None
     try:
         std = standart_tarih_yap(tarih_str)
+        if not std:
+            return None
         d, m, y = map(int, std.split("."))
         return datetime.date(y, m, d)
     except Exception:
@@ -932,7 +947,7 @@ def parse_sozel_ifade_yerel(cumle, fiyat_hafizasi):
             break
 
     # Miktar ve ürün kelimesi tespiti
-    miktar_sayi = 1
+    miktar_sayi = 1.0
     miktar_birim = "adet"
     urun_kelimesi = ""
 
@@ -942,7 +957,7 @@ def parse_sozel_ifade_yerel(cumle, fiyat_hafizasi):
         if m_match.group(3):
             miktar_birim = m_match.group(3)
         kelime = m_match.group(4)
-        if kelime not in ["tl", "lira", "kuruş", "de", "da", "te", "ta", "alındı", "aldım", "yattı"]:
+        if kelime not in ["tl", "lira", "kuruş", "de", "da", "te", "ta", "alındı", "aldım", "yattı", "harcandı", "ödedim"]:
             urun_kelimesi = kelime
 
     if not urun_kelimesi:
@@ -954,35 +969,54 @@ def parse_sozel_ifade_yerel(cumle, fiyat_hafizasi):
     # Fiyat tespiti (cümlede açıkça belirtilmiş mi, yoksa hafızadan mı çekilecek?)
     fiyat_match = re.search(r'\b(\d+([.,]\d{1,2})?)\s*(tl|lira|liraya|liralık)\b', c_lower)
     birim_fiyat = None
+    tam_eslesen_urun = (urun_kelimesi or "Ürün").title()
+    bulunan_kat = "Market & Temel Gıda"
+
     if fiyat_match:
         toplam_tutar = float(fiyat_match.group(1).replace(",", "."))
         birim_fiyat = toplam_tutar / miktar_sayi if miktar_sayi else toplam_tutar
     else:
         # Fiyat hafızasından hatırlama! (BİM'de ekmek 11 TL vb.)
-        tam_eslesen_urun = (urun_kelimesi or "Ürün").title()
-        bulunan_kat = "Market & Temel Gıda"
-        
-        # 1. Aşama: Firma + Ürün eşleşmesi
-        for (f_k, u_k), d in fiyat_hafizasi.items():
+        # 1. Aşama: Firma + Ürün eşleşmesi (Standart/Tekli ürünleri önceliklendir)
+        adaylar = []
+        for k_key, d in fiyat_hafizasi.items():
+            f_k = (d.get("firma") or "").lower()
+            u_k = (d.get("urun") or "").lower()
             if bulunan_firma.lower() in f_k and urun_kelimesi.lower() in u_k:
-                try:
-                    birim_fiyat = float(d["birim_fiyat"].replace(".", "").replace(",", "."))
-                    tam_eslesen_urun = d["urun"]
-                    bulunan_kat = d.get("kategori", "Market & Temel Gıda")
+                adaylar.append(d)
+
+        if adaylar:
+            secilen_d = None
+            for ad in adaylar:
+                u_lower = (ad.get("urun") or "").lower()
+                if "tekli" in u_lower or u_lower == urun_kelimesi.lower() or "standart" in u_lower:
+                    secilen_d = ad
                     break
-                except Exception:
-                    pass
+            if not secilen_d:
+                secilen_d = adaylar[0]
+
+            try:
+                bf_str = str(secilen_d["birim_fiyat"]).replace("TL", "").replace("₺", "").replace(".", "").replace(",", ".").strip()
+                birim_fiyat = float(bf_str)
+                tam_eslesen_urun = secilen_d["urun"]
+                bulunan_kat = secilen_d.get("kategori", "Market & Temel Gıda")
+            except Exception:
+                pass
+
         # 2. Aşama: Sadece Ürün adı eşleşmesi
         if not birim_fiyat:
-            for (f_k, u_k), d in fiyat_hafizasi.items():
+            for k_key, d in fiyat_hafizasi.items():
+                u_k = (d.get("urun") or "").lower()
                 if urun_kelimesi.lower() in u_k:
                     try:
-                        birim_fiyat = float(d["birim_fiyat"].replace(".", "").replace(",", "."))
+                        bf_str = str(d["birim_fiyat"]).replace("TL", "").replace("₺", "").replace(".", "").replace(",", ".").strip()
+                        birim_fiyat = float(bf_str)
                         tam_eslesen_urun = d["urun"]
                         bulunan_kat = d.get("kategori", "Market & Temel Gıda")
                         break
                     except Exception:
                         pass
+
         # 3. Aşama: Bilinen genel varsayılan
         if not birim_fiyat:
             if "ekmek" in urun_kelimesi.lower():
@@ -991,22 +1025,21 @@ def parse_sozel_ifade_yerel(cumle, fiyat_hafizasi):
             else:
                 birim_fiyat = 25.0
                 tam_eslesen_urun = (urun_kelimesi or "Ürün").title()
-                
+
         toplam_tutar = birim_fiyat * miktar_sayi
-        urun_kelimesi = tam_eslesen_urun
 
     miktar_str = f"{int(miktar_sayi) if miktar_sayi.is_integer() else miktar_sayi} {miktar_birim}"
     
     return {
         "tur": "Gider",
         "firma": bulunan_firma,
-        "urun": urun_kelimesi or "Ürün",
+        "urun": tam_eslesen_urun or "Ürün",
         "miktar": miktar_str,
         "birim_fiyat": f"{birim_fiyat:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
         "tutar": round(toplam_tutar, 2),
         "tarih": datetime.date.today().strftime("%d.%m.%Y"),
         "saat": saat_str,
-        "kategori": bulunan_kat if 'bulunan_kat' in locals() else "Market & Temel Gıda",
+        "kategori": bulunan_kat,
         "hafizadan": True
     }
 
@@ -1046,6 +1079,34 @@ def main(page: ft.Page):
     if hasattr(page, "services"):
         try:
             page.services.append(galeri_picker)
+        except Exception:
+            pass
+
+    # CSV Analizi İşlemci Referansı ve Global CSV Seçici Servisi
+    csv_islemci_tetikleyici = [None]
+
+    def on_csv_secimi_tamamlandi(e):
+        if hasattr(e, "files") and e.files and len(e.files) > 0:
+            f = e.files[0]
+            secilen_yol = getattr(f, "path", None)
+            ham_metin = None
+            if hasattr(f, "bytes") and f.bytes:
+                for enc in ["utf-8-sig", "utf-8", "cp1254", "latin1"]:
+                    try:
+                        ham_metin = f.bytes.decode(enc)
+                        break
+                    except Exception:
+                        pass
+                if not ham_metin and f.bytes:
+                    ham_metin = f.bytes.decode("latin1", errors="ignore")
+            if (secilen_yol and os.path.exists(str(secilen_yol))) or ham_metin:
+                if csv_islemci_tetikleyici[0]:
+                    csv_islemci_tetikleyici[0](dosya_yolu=secilen_yol, ham_metin=ham_metin)
+
+    csv_picker = ft.FilePicker(on_result=on_csv_secimi_tamamlandi)
+    if hasattr(page, "services"):
+        try:
+            page.services.append(csv_picker)
         except Exception:
             pass
 
@@ -1927,7 +1988,8 @@ def main(page: ft.Page):
         def parse_turk_tutari(val_str):
             if not val_str:
                 return 0.0
-            s = str(val_str).strip().replace('"', '').replace("'", "")
+            s = str(val_str).strip().replace('"', '').replace("'", "").replace("“", "").replace("”", "")
+            s = s.replace("TL", "").replace("₺", "").replace(" ", "")
             if not s:
                 return 0.0
             if "." in s and "," in s:
@@ -1936,7 +1998,7 @@ def main(page: ft.Page):
                 s = s.replace(",", ".")
             try:
                 return float(s)
-            except ValueError:
+            except Exception:
                 return 0.0
 
         def format_turk_para(val_float):
@@ -1988,71 +2050,153 @@ def main(page: ft.Page):
 
             return f"{m1_str} + {m2_str}".strip()
 
-        def csv_icerigini_yukle(file_path):
+        def csv_icerigini_yukle(dosya_yolu=None, ham_metin=None, zorla_ekle=False):
+            csv_islemci_tetikleyici[0] = csv_icerigini_yukle
             try:
-                content = None
-                for enc in ["utf-8-sig", "utf-8", "cp1254", "latin1"]:
-                    try:
-                        with open(file_path, "r", encoding=enc) as f:
-                            content = f.read()
-                        break
-                    except Exception:
-                        continue
+                content = ham_metin
+                if not content and dosya_yolu:
+                    for enc in ["utf-8-sig", "utf-8", "cp1254", "latin1"]:
+                        try:
+                            with open(dosya_yolu, "r", encoding=enc) as f:
+                                content = f.read()
+                            break
+                        except Exception:
+                            continue
 
                 if not content:
-                    bilgi_mesaji.value = "⚠️ CSV dosyası okunamadı."
+                    show_app_snackbar(page, "⚠️ CSV içeriği okunamadı veya boş.", color="#dc2626")
+                    bilgi_mesaji.value = "⚠️ CSV içeriği okunamadı veya boş."
                     bilgi_mesaji.color = "red"
                     page.update()
                     return
 
+                content = content.lstrip("\ufeff").strip()
                 lines_content = [line.strip() for line in content.splitlines() if line.strip()]
                 if not lines_content:
+                    show_app_snackbar(page, "⚠️ CSV içeriğinde geçerli satır bulunamadı.", color="#dc2626")
                     return
 
-                delim = ";" if ";" in lines_content[0] else ","
-                reader = csv.reader(lines_content, delimiter=delim)
-                header = [h.strip().lower() for h in next(reader, [])]
+                # Ayırıcıyı belirle (Sekme, Noktalı Virgül veya Virgül)
+                first_line = lines_content[0]
+                if "\t" in first_line:
+                    delim = "\t"
+                elif ";" in first_line:
+                    delim = ";"
+                else:
+                    delim = ","
+
+                reader = list(csv.reader(lines_content, delimiter=delim))
+                if not reader:
+                    show_app_snackbar(page, "⚠️ CSV ayrıştırılamadı.", color="#dc2626")
+                    return
+
+                # Satır başlık mı veri mi tespiti
+                def satir_baslik_mi(row):
+                    if not row:
+                        return False
+                    ilk = str(row[0]).strip().lower()
+                    if stringden_tarih_al(ilk) is not None:
+                        return False
+                    if any(w in ilk for w in ["tarih", "date", "zaman", "gün"]):
+                        return True
+                    for cell in row:
+                        c_val = str(cell).strip().lower()
+                        if c_val in ["firma", "ürün", "kategori", "tutar", "miktar", "birim fiyat", "toplam tutar", "kaynak"]:
+                            return True
+                    return False
+
+                header = []
+                data_rows = []
+                if satir_baslik_mi(reader[0]):
+                    header = [str(h).strip().lower() for h in reader[0]]
+                    data_rows = reader[1:]
+                else:
+                    data_rows = reader
+
+                # Tırnaksız virgüllü kuruşları düzeltme fonksiyonu
+                def satir_duzelt(row):
+                    r = [str(x).strip() for x in row]
+                    # Son iki eleman ayrılmış ondalık mı kontrol et (örn: '453' ve '00' -> '453,00')
+                    if len(r) >= 3 and r[-1].isdigit() and len(r[-1]) <= 2 and r[-2].replace(".", "").replace(" ", "").isdigit():
+                        r = r[:-2] + [f"{r[-2]},{r[-1]}"]
+                    if len(r) >= 4 and r[-2].isdigit() and len(r[-2]) <= 2 and r[-3].replace(".", "").replace(" ", "").isdigit():
+                        r = r[:-3] + [f"{r[-3]},{r[-2]}", r[-1]]
+                    return r
 
                 en_son_tarih = None
                 ham_kayitlar = []
 
-                for row in reader:
-                    if not row or len(row) < 2:
+                for raw_r in data_rows:
+                    if not raw_r:
+                        continue
+                    row = satir_duzelt(raw_r)
+                    if len(row) < 2:
                         continue
 
-                    tarih_ham = row[0].strip() if len(row) > 0 else ""
+                    tarih_ham = row[0].strip()
                     t_str, s_str = parse_tarih_saat(tarih_ham)
 
                     t_date = stringden_tarih_al(t_str)
                     if t_date:
-                        en_son_tarih = t_date
+                        if not en_son_tarih or t_date > en_son_tarih:
+                            en_son_tarih = t_date
 
-                    if len(row) == 5:
+                    firma_str = ""
+                    urun_str = ""
+                    kategori_str = "Diğer"
+                    miktar_str = ""
+                    birim_fiyat_str = ""
+                    tutar_str = "0"
+
+                    if len(row) >= 7:
+                        # [Tarih, Firma, Ürün, Kategori, Miktar, Birim Fiyat, Tutar]
                         firma_str = row[1].strip()
                         urun_str = row[2].strip()
-                        kategori_str = row[3].strip()
-                        miktar_str = ""
-                        birim_fiyat_str = ""
+                        kategori_str = row[3].strip() or "Diğer"
+                        miktar_str = row[4].strip()
+                        birim_fiyat_str = row[5].strip().replace('"', '')
+                        tutar_str = row[6].strip()
+                    elif len(row) == 6:
+                        # [Tarih, Firma, Ürün, Kategori, Miktar, Tutar]
+                        firma_str = row[1].strip()
+                        urun_str = row[2].strip()
+                        kategori_str = row[3].strip() or "Diğer"
+                        miktar_str = row[4].strip()
+                        tutar_str = row[5].strip()
+                    elif len(row) == 5:
+                        # [Tarih, Kaynak/Firma, Açıklama/Ürün, Kategori, Tutar]
+                        firma_str = row[1].strip()
+                        urun_str = row[2].strip()
+                        kategori_str = row[3].strip() or "Diğer"
                         tutar_str = row[4].strip()
-                    else:
-                        firma_str = row[1].strip() if len(row) > 1 else ""
-                        urun_str = row[2].strip() if len(row) > 2 else ""
-                        kategori_str = row[3].strip() if len(row) > 3 else "Diğer"
-                        miktar_str = row[4].strip() if len(row) > 4 else ""
-                        birim_fiyat_str = row[5].strip().replace("\"", "") if len(row) > 5 else ""
-                        tutar_str = row[6].strip() if len(row) > 6 else (row[1].strip() if len(row) == 2 else "0")
+                    elif len(row) == 4:
+                        # [Tarih, Firma, Ürün, Tutar]
+                        firma_str = row[1].strip()
+                        urun_str = row[2].strip()
+                        tutar_str = row[3].strip()
+                    elif len(row) == 3:
+                        # [Tarih, Açıklama, Tutar]
+                        firma_str = row[1].strip()
+                        urun_str = row[1].strip()
+                        tutar_str = row[2].strip()
+                    elif len(row) == 2:
+                        # [Tarih, Tutar]
+                        firma_str = "Harcama"
+                        urun_str = "Genel Gider"
+                        tutar_str = row[1].strip()
 
                     tutar_float = parse_turk_tutari(tutar_str)
 
+                    # İşlem türü tespiti
                     tur_turu = "Gider"
-                    is_gelir_ipucu = any("kaynak" in h for h in header) or any(k in kategori_str.lower() for k in ["maaş", "ödenek", "ek ders", "gelir", "devir"])
+                    is_gelir_ipucu = any("kaynak" in h for h in header) or any(k in kategori_str.lower() for k in ["maaş", "ödenek", "ek ders", "gelir", "devir", "hediye"]) or any(k in urun_str.lower() for k in ["maaş", "ödenek", "ek ders", "gelir"])
                     if is_gelir_ipucu:
                         tur_turu = "Gelir"
                     elif "transfer" in kategori_str.lower() or "birikim" in kategori_str.lower():
                         tur_turu = "Para Aktarımı"
 
                     kayit = {
-                        "kullanici": kullanici,
+                        "kullanici": kullanici or "Ev Yöneticisi",
                         "tur": tur_turu,
                         "tarih": t_str or datetime.date.today().strftime("%d.%m.%Y"),
                         "saat": s_str or datetime.datetime.now().strftime("%H:%M"),
@@ -2067,6 +2211,10 @@ def main(page: ft.Page):
                         "tutar": tutar_float
                     }
                     ham_kayitlar.append(kayit)
+
+                if not ham_kayitlar:
+                    show_app_snackbar(page, "⚠️ Dosyadan geçerli işlem satırı çıkarılamadı.", color="#dc2626")
+                    return
 
                 # 1. Birebir Aynı Olan Mükerrer Kayıtları Birleştirme (Fiş İçi Toplama)
                 birlestirilmis_kayitlar = []
@@ -2093,71 +2241,120 @@ def main(page: ft.Page):
                         birlestirme_haritasi[merge_key] = k
                         birlestirilmis_kayitlar.append(k)
 
-                # 2. Veritabanında Zaten Var Olan Kayıtları Ayıklama (Çift Yükleme Koruması)
-                mevcut_kayitlar_seti = set()
-                for it in islemler:
-                    m_key = (
-                        it.get("tarih", "").strip(),
-                        it.get("saat", "").strip(),
-                        it.get("tur", "").strip(),
-                        (it.get("firma") or it.get("kaynak") or "").strip().lower(),
-                        (it.get("urun") or it.get("aciklama") or "").strip().lower(),
-                        round(float(it.get("tutar") or 0.0), 2)
-                    )
-                    mevcut_kayitlar_seti.add(m_key)
-
-                yeni_eklenenler = []
-                for k in birlestirilmis_kayitlar:
-                    m_key = (
-                        k["tarih"].strip(),
-                        k["saat"].strip(),
-                        k["tur"].strip(),
-                        (k["firma"] or k["kaynak"]).strip().lower(),
-                        (k["urun"] or k["aciklama"]).strip().lower(),
-                        round(float(k["tutar"]), 2)
-                    )
-                    if m_key not in mevcut_kayitlar_seti:
-                        yeni_eklenenler.append(k)
+                # 2. Veritabanında Zaten Var Olan Kayıtları Ayıklama
+                if zorla_ekle:
+                    yeni_eklenenler = list(birlestirilmis_kayitlar)
+                else:
+                    mevcut_kayitlar_seti = set()
+                    for it in islemler:
+                        m_key = (
+                            it.get("tarih", "").strip(),
+                            it.get("saat", "").strip(),
+                            it.get("tur", "").strip(),
+                            (it.get("firma") or it.get("kaynak") or "").strip().lower(),
+                            (it.get("urun") or it.get("aciklama") or "").strip().lower(),
+                            round(float(it.get("tutar") or 0.0), 2)
+                        )
                         mevcut_kayitlar_seti.add(m_key)
 
+                    yeni_eklenenler = []
+                    for k in birlestirilmis_kayitlar:
+                        m_key = (
+                            k["tarih"].strip(),
+                            k["saat"].strip(),
+                            k["tur"].strip(),
+                            (k["firma"] or k["kaynak"]).strip().lower(),
+                            (k["urun"] or k["aciklama"]).strip().lower(),
+                            round(float(k["tutar"]), 2)
+                        )
+                        if m_key not in mevcut_kayitlar_seti:
+                            yeni_eklenenler.append(k)
+                            mevcut_kayitlar_seti.add(m_key)
+
+                # Filtreleri sıfırla ki yüklenen kayıtlar filtreye takılıp gizlenmesin!
+                secilen_filtre[0] = "Tümü"
+                secilen_kategori[0] = "Tüm Kategoriler"
+                tum_zamanlar_modu[0] = True
+
                 if not yeni_eklenenler:
-                    bilgi_mesaji.value = f"ℹ️ Yüklenen dosyadaki tüm kayıtlar ({len(birlestirilmis_kayitlar)} adet) zaten sistemde kayıtlı."
-                    bilgi_mesaji.color = "blue"
+                    arayuzu_guncelle()
+                    try:
+                        liste_arayuzu.update()
+                    except Exception:
+                        pass
                     page.update()
+
+                    show_app_snackbar(
+                        page,
+                        f"ℹ️ Dosyadaki {len(birlestirilmis_kayitlar)} işlem zaten sistemde kayıtlı. Tüm Zamanlar görünümünde listelendi.",
+                        color="#0284c7"
+                    )
+
+                    def tekrar_hepsini_ekle(ev):
+                        close_app_dialog(page, zaten_kayitli_dlg)
+                        csv_icerigini_yukle(dosya_yolu=dosya_yolu, ham_metin=content, zorla_ekle=True)
+
+                    zaten_kayitli_dlg = ft.AlertDialog(
+                        title=ft.Row([
+                            ft.Icon(ft.Icons.INFO_OUTLINE, color="#0284c7", size=24),
+                            ft.Text("İşlemler Zaten Mevcut", size=16, weight=ft.FontWeight.BOLD)
+                        ], spacing=8),
+                        content=ft.Text(
+                            f"Yüklenen CSV dosyasındaki {len(birlestirilmis_kayitlar)} adet işlem sistemde zaten kayıtlı olduğu için mükerrer eklenmedi.\n\n"
+                            f"Tüm Zamanlar görünümüne geçilerek mevcut işlemleriniz listelendi.\n\n"
+                            f"Yine de bu kayıtları sıfırdan tekrar eklemek ister misiniz?",
+                            size=12,
+                            color="#334155"
+                        ),
+                        actions=[
+                            make_button("✕ Hayır, Kapat", height=34, outlined=True, on_click=lambda _: close_app_dialog(page, zaten_kayitli_dlg)),
+                            make_button("⚠️ Evet, Hepsini Tekrar Ekle", height=34, bgcolor="#e11d48", color="white", on_click=tekrar_hepsini_ekle)
+                        ],
+                        actions_alignment=ft.MainAxisAlignment.END
+                    )
+                    show_app_dialog(page, zaten_kayitli_dlg)
                     return
 
-                if supabase and yeni_eklenenler:
-                    try:
-                        chunk_size = 50
-                        for i in range(0, len(yeni_eklenenler), chunk_size):
-                            chunk = yeni_eklenenler[i:i + chunk_size]
-                            res = supabase.table("islemler").insert(chunk).execute()
-                            if res.data:
-                                for idx, item_res in enumerate(res.data):
-                                    chunk[idx]["id"] = item_res.get("id")
-                    except Exception as ex:
-                        print("CSV Supabase toplu kayıt hatası:", ex)
-
+                # Yeni kayıtları hafızaya ekle (Hemen ekranda görünsün!)
                 for k in reversed(yeni_eklenenler):
                     islemler.insert(0, k)
 
-                if en_son_tarih:
-                    csv_bas, csv_bit = aktif_butce_donemini_bul(en_son_tarih)
-                    secilen_donem_bas[0] = csv_bas
-                    secilen_donem_bit[0] = csv_bit
-                    tum_zamanlar_modu[0] = False
-
-                ek_bilgi = f" ({birlestirilen_sayisi} mükerrer kayıt birleştirildi)" if birlestirilen_sayisi > 0 else ""
-                bilgi_mesaji.value = f"✅ CSV\x27den {len(yeni_eklenenler)} işlem başarıyla yüklendi!{ek_bilgi}"
-                bilgi_mesaji.color = "green"
                 arayuzu_guncelle()
-
-            except Exception as e:
-                bilgi_mesaji.value = f"⚠️ CSV aktarım hatası: {str(e)[:45]}"
-                bilgi_mesaji.color = "red"
+                try:
+                    liste_arayuzu.update()
+                except Exception:
+                    pass
                 page.update()
 
-        
+                # Buluta senkronizasyonu arka planda yap (Ekran donmasın!)
+                if supabase and yeni_eklenenler:
+                    def bulut_senkronize_et():
+                        try:
+                            chunk_size = 50
+                            for i in range(0, len(yeni_eklenenler), chunk_size):
+                                chunk = yeni_eklenenler[i:i + chunk_size]
+                                res = supabase.table("islemler").insert(chunk).execute()
+                                if res.data:
+                                    for idx, item_res in enumerate(res.data):
+                                        chunk[idx]["id"] = item_res.get("id")
+                        except Exception as ex:
+                            print("CSV Supabase toplu kayıt hatası:", ex)
+
+                    threading.Thread(target=bulut_senkronize_et, daemon=True).start()
+
+                ek_bilgi = f" ({birlestirilen_sayisi} mükerrer birleştirildi)" if birlestirilen_sayisi > 0 else ""
+                basari_mesaji = f"✅ CSV'den {len(yeni_eklenenler)} işlem başarıyla yüklendi!{ek_bilgi}"
+                bilgi_mesaji.value = basari_mesaji
+                bilgi_mesaji.color = "green"
+                show_app_snackbar(page, basari_mesaji, color="#16a34a")
+
+            except Exception as e:
+                hata_msg = f"⚠️ CSV aktarım hatası: {str(e)[:60]}"
+                bilgi_mesaji.value = hata_msg
+                bilgi_mesaji.color = "red"
+                show_app_snackbar(page, hata_msg, color="#dc2626")
+                page.update()
+
         # --- AI FİŞ TARAMA İŞLEMCİSİ (Android + Masaüstü Tam Uyumlu) ---
         def fis_gorselini_tara_ve_goster(dosya_yolu):
             fis_analiz_tetikleyici[0] = fis_gorselini_tara_ve_goster
@@ -2657,29 +2854,113 @@ def main(page: ft.Page):
 
             show_app_dialog(page, fis_dialog)
 
-                # --- CSV YÜKLEME İŞLEMCİSİ (FILEPICKER BAĞIMSIZ) ---
+        # --- CSV YÜKLEME İŞLEMCİSİ (HEM DOSYA SEÇİCİ HEM YAPIŞTIRMA DESTEKLİ) ---
         def csv_yukle_tiklandi(e=None):
-            if not platform_mobil_mi():
-                try:
-                    import tkinter as tk
-                    from tkinter import filedialog
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.attributes("-topmost", True)
-                    dy = filedialog.askopenfilename(
-                        title="Bütçe CSV Dosyasını Seçin",
-                        filetypes=[("CSV Dosyaları", "*.csv"), ("Tüm Dosyalar", "*.*")]
-                    )
-                    root.destroy()
-                    if dy and os.path.exists(dy):
-                        csv_icerigini_yukle(dy)
-                        return
-                except Exception:
-                    pass
+            csv_islemci_tetikleyici[0] = csv_icerigini_yukle
 
+            # 1. Sistem Dosya Seçiciyi Açma Aksiyonu
+            def sistem_dosya_secici_ac(ev=None):
+                close_app_dialog(page, csv_dialog)
+                show_app_snackbar(page, "📂 Dosya seçici açılıyor...", color="#2563eb")
+
+                if not platform_mobil_mi():
+                    try:
+                        import tkinter as tk
+                        from tkinter import filedialog
+                        root = tk.Tk()
+                        root.withdraw()
+                        root.attributes("-topmost", True)
+                        dy = filedialog.askopenfilename(
+                            title="Bütçe CSV Dosyasını Seçin",
+                            filetypes=[("CSV Dosyaları", "*.csv"), ("Metin Dosyaları", "*.txt"), ("Tüm Dosyalar", "*.*")]
+                        )
+                        root.destroy()
+                        if dy and os.path.exists(dy):
+                            csv_icerigini_yukle(dosya_yolu=dy)
+                            return
+                    except Exception:
+                        pass
+
+                # Mobilde hazır csv_picker servisini tetikle
+                try:
+                    res = csv_picker.pick_files(
+                        dialog_title="Bütçe CSV Dosyasını Seçin",
+                        allowed_extensions=["csv", "txt"],
+                        allow_multiple=False,
+                        with_data=True
+                    )
+                    if asyncio.iscoroutine(res):
+                        async def _await_csv_picker_coro():
+                            try:
+                                files = await res
+                                if files and len(files) > 0:
+                                    f = files[0]
+                                    p = getattr(f, "path", None)
+                                    raw = None
+                                    if hasattr(f, "bytes") and f.bytes:
+                                        for enc in ["utf-8-sig", "utf-8", "cp1254", "latin1"]:
+                                            try:
+                                                raw = f.bytes.decode(enc)
+                                                break
+                                            except Exception:
+                                                pass
+                                    if p or raw:
+                                        csv_icerigini_yukle(dosya_yolu=p, ham_metin=raw)
+                            except Exception as ex_coro:
+                                print("Await CSV picker hatası:", ex_coro)
+
+                        if hasattr(page, "run_task"):
+                            page.run_task(_await_csv_picker_coro)
+                        else:
+                            import threading
+                            threading.Thread(target=lambda: asyncio.run(_await_csv_picker_coro()), daemon=True).start()
+                except Exception as ex_pick:
+                    show_app_snackbar(page, f"Seçici hatası: {ex_pick}", color="#ef4444")
+
+            # 2. Metin Olarak Yapıştırarak Yükleme Aksiyonu
+            def metin_yapistir_dialogu_ac(ev=None):
+                close_app_dialog(page, csv_dialog)
+                yapistir_tf = ft.TextField(
+                    label="CSV Verisini Buraya Yapıştırın",
+                    hint_text="Tarih,Firma,Ürün,Kategori,Miktar,Birim Fiyat,Tutar...\n06.09.2026,Palen Doğalgaz,Doğalgaz,Ev & Faturalar,1 Fatura,453,00,453,00",
+                    multiline=True,
+                    min_lines=6,
+                    max_lines=12,
+                    text_size=11
+                )
+
+                def yapistirilan_yukle(ev2):
+                    metin = yapistir_tf.value.strip()
+                    if not metin:
+                        show_app_snackbar(page, "⚠️ Lütfen yapıştırılacak CSV metnini giriniz.", color="#ef4444")
+                        return
+                    close_app_dialog(page, yapistir_dialog)
+                    csv_icerigini_yukle(ham_metin=metin)
+
+                yapistir_dialog = ft.AlertDialog(
+                    title=ft.Row([
+                        ft.Icon(ft.Icons.PASTE, color="#8b5cf6", size=24),
+                        ft.Text("CSV Metnini Yapıştır", size=16, weight=ft.FontWeight.BOLD)
+                    ], spacing=8),
+                    content=ft.Container(
+                        content=ft.Column([
+                            ft.Text("Kopyaladığınız CSV satırlarını aşağıdaki alana yapıştırıp hemen yükleyebilirsiniz:", size=11, color="#64748b"),
+                            yapistir_tf
+                        ], spacing=8, tight=True),
+                        width=340
+                    ),
+                    actions=[
+                        make_button("✕ Vazgeç", height=34, outlined=True, on_click=lambda _: close_app_dialog(page, yapistir_dialog)),
+                        make_button("📥 İçeriği Yükle", height=34, bgcolor="#8b5cf6", color="white", on_click=yapistirilan_yukle)
+                    ],
+                    actions_alignment=ft.MainAxisAlignment.END
+                )
+                show_app_dialog(page, yapistir_dialog)
+
+            # 3. Klasörde Otomatik Bulunan CSV Dosyaları
             bulunan_csvler = son_csvleri_bul()
             yol_tf = ft.TextField(
-                label="CSV Dosya Yolu",
+                label="Manuel CSV Dosya Yolu",
                 value=bulunan_csvler[0] if bulunan_csvler else "/storage/emulated/0/Download/HaneButcesi.csv",
                 text_size=11,
                 dense=True
@@ -2687,10 +2968,27 @@ def main(page: ft.Page):
 
             def secilen_csv_yukle(dosya_yolu):
                 close_app_dialog(page, csv_dialog)
-                csv_icerigini_yukle(dosya_yolu)
+                csv_icerigini_yukle(dosya_yolu=dosya_yolu)
 
             dialog_icerik = [
-                ft.Text("İndirilenler klasöründeki CSV dosyaları:", size=11, color="#64748b")
+                make_button(
+                    "📁 Dosyalardan / İndirilenlerden Seç (.csv)",
+                    icon=ft.Icons.FOLDER_OPEN,
+                    bgcolor="#2563eb",
+                    color="white",
+                    height=44,
+                    on_click=sistem_dosya_secici_ac
+                ),
+                make_button(
+                    "📋 CSV Metnini Yapıştırarak Yükle",
+                    icon=ft.Icons.CONTENT_PASTE,
+                    bgcolor="#8b5cf6",
+                    color="white",
+                    height=38,
+                    on_click=metin_yapistir_dialogu_ac
+                ),
+                ft.Divider(height=14, color="#e2e8f0"),
+                ft.Text("İndirilenler klasöründe algılanan CSV dosyaları:", size=11, color="#64748b")
             ]
 
             if bulunan_csvler:
@@ -2711,7 +3009,7 @@ def main(page: ft.Page):
                     )
             else:
                 dialog_icerik.append(
-                    ft.Text("İndirilenler klasöründe CSV bulunamadı.", size=10, color="#94a3b8")
+                    ft.Text("İndirilenler klasöründe otomatik CSV bulunamadı.", size=10, color="#94a3b8")
                 )
 
             dialog_icerik.extend([
@@ -2727,7 +3025,7 @@ def main(page: ft.Page):
                 ], spacing=8),
                 content=ft.Container(
                     content=ft.Column(dialog_icerik, spacing=8, tight=True),
-                    width=330,
+                    width=340,
                     padding=2
                 ),
                 actions=[
@@ -3109,8 +3407,6 @@ def main(page: ft.Page):
                 zaman_metni = f"{t_kisa} {s_str}".strip()
 
                 if islem_turu_val == "Gelir":
-                    if not yonetici_mi:
-                        continue
                     baslik = item.get("kaynak") or "Gelir"
                     ack = item.get("aciklama") or item.get("gelir_turu") or ""
                     alt_detay = f"{zaman_metni} • {ack}" if ack else zaman_metni
@@ -3148,6 +3444,7 @@ def main(page: ft.Page):
                     ikon_bg = "#fee2e2"
                     ikon_renk = "#b91c1c"
 
+                can_modify = yonetici_mi or islem_turu_val == "Gider"
                 duzenle_butonu = ft.IconButton(
                     icon=ft.Icons.EDIT_OUTLINED,
                     icon_color="#2563eb",
@@ -3155,6 +3452,7 @@ def main(page: ft.Page):
                     width=26,
                     height=26,
                     padding=0,
+                    visible=can_modify,
                     tooltip="Düzenle / Kategori Değiştir",
                     on_click=lambda e, it=item: islem_duzenle_modal_ac(it)
                 )
@@ -3166,6 +3464,7 @@ def main(page: ft.Page):
                     width=26,
                     height=26,
                     padding=0,
+                    visible=can_modify,
                     tooltip="Sil",
                     on_click=lambda e, it=item: silme_onayi_iste(it)
                 )
@@ -3285,6 +3584,14 @@ def main(page: ft.Page):
                 pass
             try:
                 bilgi_mesaji.update()
+            except Exception:
+                pass
+            try:
+                liste_arayuzu.update()
+            except Exception:
+                pass
+            try:
+                liste_kapsayici.update()
             except Exception:
                 pass
             page.update()
@@ -3473,9 +3780,66 @@ def main(page: ft.Page):
 
         yetki_metni = "👑 Ev Yöneticisi Paneli" if yonetici_mi else "👤 Aile Üyesi Paneli"
 
+        # --- HESAP DEĞİŞTİRME VE ÇIKIŞ MERKEZİ ---
         def cikis_yap_aksiyon(e=None):
-            oturum_sil()
-            giris_ekranina_git()
+            def yoneticiye_gec(ev):
+                close_app_dialog(page, cikis_dialog)
+                oturum_kaydet("Ev Yöneticisi", True)
+                ana_ekrana_git("Ev Yöneticisi", yonetici_mi=True)
+
+            def uyeye_gec(ev):
+                close_app_dialog(page, cikis_dialog)
+                oturum_kaydet("Aile Üyesi", False)
+                ana_ekrana_git("Aile Üyesi", yonetici_mi=False)
+
+            def oturumu_kapat(ev):
+                close_app_dialog(page, cikis_dialog)
+                oturum_sil()
+                giris_ekranina_git()
+
+            diger_rol_btn = make_button(
+                "👑 Ev Yöneticisi Hesabına Geç",
+                icon=ft.Icons.ADMIN_PANEL_SETTINGS,
+                bgcolor="#2563eb",
+                color="white",
+                height=40,
+                on_click=yoneticiye_gec
+            ) if not yonetici_mi else make_button(
+                "👤 Aile Üyesi Hesabına Geç",
+                icon=ft.Icons.PERSON,
+                bgcolor="#0284c7",
+                color="white",
+                height=40,
+                on_click=uyeye_gec
+            )
+
+            cikis_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.MANAGE_ACCOUNTS, color="#2563eb", size=24),
+                    ft.Text("Hesap Değiştir / Çıkış", size=16, weight=ft.FontWeight.BOLD)
+                ], spacing=8),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Text(f"Aktif Hesap: {kullanici} ({'Ev Yöneticisi' if yonetici_mi else 'Aile Üyesi'})", size=11, color="#64748b"),
+                        ft.Container(height=4),
+                        diger_rol_btn,
+                        make_button(
+                            "🚪 Tamamen Çıkış Yap (Giriş Ekranı)",
+                            icon=ft.Icons.LOGOUT,
+                            outlined=True,
+                            height=38,
+                            on_click=oturumu_kapat
+                        )
+                    ], spacing=8, tight=True),
+                    width=320,
+                    padding=4
+                ),
+                actions=[
+                    make_button("✕ İptal", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, cikis_dialog))
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+            show_app_dialog(page, cikis_dialog)
 
         # Dönem Seçim Araç Çubuğu (2 Kademeli, Asla Kırpılmayan ve Taşmayan Tasarım)
         onceki_btn = make_button("◀", width=36, height=32, outlined=True, tooltip="Önceki Bütçe Dönemi", on_click=lambda _: donem_kaydir("onceki"))
@@ -3934,7 +4298,9 @@ def main(page: ft.Page):
                         content=ft.Text(yetki_metni, size=10, color="white", weight=ft.FontWeight.BOLD),
                         bgcolor="#2563eb",
                         border_radius=10,
-                        padding=make_padding(8, 2)
+                        padding=make_padding(8, 2),
+                        tooltip="Hesap Değiştirmek İçin Dokunun",
+                        on_click=cikis_yap_aksiyon
                     )
                 ], spacing=8),
                 ft.Row([
@@ -4155,6 +4521,12 @@ Yalnızca saf JSON nesnesi döndür:
             print("Açılış otomatik harçlık kontrol hatası:", ex_h_start)
 
     def giris_ekranina_git():
+        if hasattr(page, "scroll_to"):
+            try:
+                page.scroll_to(offset=0, duration=0)
+            except Exception:
+                pass
+        page.dialog = None
         if hasattr(page, "clean"):
             try:
                 page.clean()
@@ -4185,9 +4557,19 @@ Yalnızca saf JSON nesnesi döndür:
                 hata_mesaji.value = "Hatalı kullanıcı adı veya şifre!"
                 page.update()
 
+        def hizli_yonetici_giris(ev):
+            if beni_hatirla.value:
+                oturum_kaydet("Ev Yöneticisi", True)
+            ana_ekrana_git("Ev Yöneticisi", yonetici_mi=True)
+
+        def hizli_uye_giris(ev):
+            if beni_hatirla.value:
+                oturum_kaydet("Aile Üyesi", False)
+            ana_ekrana_git("Aile Üyesi", yonetici_mi=False)
+
         page.add(
             ft.Column([
-                ft.Container(height=60),
+                ft.Container(height=40),
                 ft.Text("🏠 Hane Bütçesi Giriş", size=24, weight=ft.FontWeight.BOLD),
                 ft.Container(height=10),
                 kullanici_adi,
@@ -4195,7 +4577,13 @@ Yalnızca saf JSON nesnesi döndür:
                 ft.Container(content=ft.Row([beni_hatirla], alignment=ft.MainAxisAlignment.START), width=320),
                 ft.Container(height=5),
                 make_button("Giriş Yap", icon=ft.Icons.LOGIN, bgcolor="blue", color="white", width=320, height=45, on_click=giris_yap),
-                hata_mesaji
+                hata_mesaji,
+                ft.Divider(height=24, color="#e2e8f0"),
+                ft.Text("⚡ Tek Tıkla Hızlı Hesap Girişi:", size=11, color="#64748b", weight=ft.FontWeight.W_600),
+                ft.Row([
+                    make_button("👑 Yönetici", bgcolor="#2563eb", color="white", height=36, on_click=hizli_yonetici_giris),
+                    make_button("👤 Aile Üyesi", bgcolor="#0284c7", color="white", height=36, on_click=hizli_uye_giris),
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=10)
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER)
         )
 
