@@ -1894,10 +1894,9 @@ def main(page: ft.Page):
                     fis_gorselini_tara_ve_goster(secilen_dosya)
 
         mobil_file_picker = ft.FilePicker(on_result=mobil_dosya_secildi)
-        if hasattr(page, "overlay"):
-            page.overlay.append(mobil_file_picker)
+        if hasattr(page, "services"):
             try:
-                page.update()
+                page.services.append(mobil_file_picker)
             except Exception:
                 pass
 
@@ -1914,8 +1913,7 @@ def main(page: ft.Page):
                 try:
                     mobil_file_picker.pick_files(
                         dialog_title="Fiş / Fatura Fotoğrafı Seçin",
-                        file_type=ft.FilePickerFileType.IMAGE,
-                        allowed_extensions=["jpg", "jpeg", "png", "webp", "pdf", "heic"]
+                        allow_multiple=False
                     )
                     return
                 except Exception as ex_mob:
