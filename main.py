@@ -2556,117 +2556,230 @@ def main(page: ft.Page):
                         show_app_snackbar(page, "⚠️ Fişte herhangi bir ürün kalemi tespit edilemedi.", color="#f59e0b")
                         return
 
-                    onay_listesi = []
-                    secim_kontrolleri = []
+                    std_tarih = standart_tarih_yap(tarih)
+                    saat_kisa = str(saat).strip()[:5] if saat else "12:00"
 
+                    # --- MÜKERRER FİŞ KONTROLÜ (SAAT VE ÜRÜN ANALİZİ) ---
+                    # Özellikle fişin saatinden, tarihinden ve ürün/tutar eşleşmesinden kontrol edilir
+                    mukerrer_eslesmeler = {}
                     for idx, u in enumerate(urunler):
-                        u_adi = u.get("urun") or f"Ürün {idx+1}"
-                        u_miktar = u.get("miktar") or "1 Adet"
-                        u_fiyat = float(u.get("birim_fiyat") or u.get("tutar") or 0.0)
-                        u_tutar = float(u.get("tutar") or u_fiyat)
-                        u_kat = kategori_akilli_duzelt(u_adi, firma=firma, mevcut_kat=u.get("kategori"))
-                        if u_kat not in GIDER_KATEGORILERI:
-                            u_kat = "Market & Temel Gıda"
+                        u_adi_norm = str(u.get("urun") or "").strip().lower()
+                        u_tut = round(float(u.get("tutar") or u.get("birim_fiyat") or 0.0), 2)
+                        for it in islemler:
+                            it_tar = standart_tarih_yap(it.get("tarih"))
+                            it_st = str(it.get("saat", "")).strip()[:5]
+                            it_fir = str(it.get("firma", "")).strip().lower()
+                            it_urn = str(it.get("urun", "")).strip().lower()
+                            it_tut = round(float(it.get("tutar") or 0.0), 2)
 
-                        chk = ft.Checkbox(value=True, label=f"{u_adi} ({u_miktar}) - {u_tutar:,.2f} TL • [{u_kat}]")
-                        onay_listesi.append({
-                            "chk": chk,
-                            "urun": u_adi,
-                            "miktar": u_miktar,
-                            "birim_fiyat": u_fiyat,
-                            "tutar": u_tutar,
-                            "kategori": u_kat
-                        })
-                        secim_kontrolleri.append(chk)
+                            if it_tar == std_tarih and it_st == saat_kisa:
+                                if (u_adi_norm in it_urn or it_urn in u_adi_norm or firma.lower() in it_fir) and abs(it_tut - u_tut) < 0.05:
+                                    mukerrer_eslesmeler[idx] = it
+                                    break
 
-                    def dialog_kapat(ev):
-                        close_app_dialog(page, fis_dialog)
+                    tam_mukerrer = len(mukerrer_eslesmeler) == len(urunler) and len(urunler) > 0
+                    kismi_mukerrer = len(mukerrer_eslesmeler) > 0 and not tam_mukerrer
 
-                    def secilenleri_ekle(ev):
-                        eklenen_sayisi = 0
-                        eklenen_tutar = 0.0
-                        simdi_ts = int(datetime.datetime.now().timestamp() * 1000)
+                    def onay_dialogunu_ac(yine_de_onay=False):
+                        onay_listesi = []
+                        secim_kontrolleri = []
 
-                        std_tarih = standart_tarih_yap(tarih)
-                        fis_date_obj = stringden_tarih_al(std_tarih)
+                        for idx, u in enumerate(urunler):
+                            u_adi = u.get("urun") or f"Ürün {idx+1}"
+                            u_miktar = u.get("miktar") or "1 Adet"
+                            u_fiyat = float(u.get("birim_fiyat") or u.get("tutar") or 0.0)
+                            u_tutar = float(u.get("tutar") or u_fiyat)
+                            u_kat = kategori_akilli_duzelt(u_adi, firma=firma, mevcut_kat=u.get("kategori"))
+                            if u_kat not in GIDER_KATEGORILERI:
+                                u_kat = "Market & Temel Gıda"
 
-                        if fis_date_obj:
-                            if not (secilen_donem_bas[0] <= fis_date_obj <= secilen_donem_bit[0]):
-                                p_bas, p_bit = aktif_butce_donemini_bul(fis_date_obj)
-                                secilen_donem_bas[0] = p_bas
-                                secilen_donem_bit[0] = p_bit
-                                tum_zamanlar_modu[0] = False
+                            zaten_kayitli = idx in mukerrer_eslesmeler
+                            # Mükerrer olan ürünlerin işareti varsayılan olarak kaldırılır (çift eklenmesin)
+                            chk_val = False if (zaten_kayitli and not yine_de_onay) else True
+                            rozet = "⚠️ [ZATEN KAYITLI] " if zaten_kayitli else ""
+                            chk_label = f"{rozet}{u_adi} ({u_miktar}) - {u_tutar:,.2f} TL • [{u_kat}]"
 
-                        for item_idx, itm in enumerate(onay_listesi):
-                            if itm["chk"].value:
-                                yeni_id = str(simdi_ts + item_idx)
-                                yeni_kayit = {
-                                    "id": yeni_id,
-                                    "kullanici": kullanici,
-                                    "tur": "Gider",
-                                    "tarih": std_tarih,
-                                    "saat": saat,
-                                    "kaynak": "",
-                                    "gelir_turu": "",
-                                    "aciklama": f"AI Fiş ({firma})",
-                                    "firma": firma,
-                                    "urun": itm["urun"],
-                                    "kategori": itm["kategori"],
-                                    "miktar": itm["miktar"],
-                                    "birim_fiyat": itm["birim_fiyat"],
-                                    "tutar": itm["tutar"]
-                                }
+                            chk = ft.Checkbox(value=chk_val, label=chk_label)
+                            onay_listesi.append({
+                                "chk": chk,
+                                "urun": u_adi,
+                                "miktar": u_miktar,
+                                "birim_fiyat": u_fiyat,
+                                "tutar": u_tutar,
+                                "kategori": u_kat,
+                                "mukerrer": zaten_kayitli
+                            })
+                            secim_kontrolleri.append(chk)
 
-                                if supabase:
-                                    try:
-                                        supabase.table("islemler").insert(yeni_kayit).execute()
-                                    except Exception as db_err:
-                                        print("Supabase kayıt hatası:", db_err)
+                        def dialog_kapat(ev):
+                            close_app_dialog(page, fis_dialog)
 
-                                islemler.append(yeni_kayit)
-                                eklenen_sayisi += 1
-                                eklenen_tutar += itm["tutar"]
+                        def secilenleri_ekle(ev):
+                            eklenen_sayisi = 0
+                            eklenen_tutar = 0.0
+                            simdi_ts = int(datetime.datetime.now().timestamp() * 1000)
 
-                        dialog_kapat(None)
+                            fis_date_obj = stringden_tarih_al(std_tarih)
+                            if fis_date_obj:
+                                if not (secilen_donem_bas[0] <= fis_date_obj <= secilen_donem_bit[0]):
+                                    p_bas, p_bit = aktif_butce_donemini_bul(fis_date_obj)
+                                    secilen_donem_bas[0] = p_bas
+                                    secilen_donem_bit[0] = p_bit
+                                    tum_zamanlar_modu[0] = False
 
-                        secilen_filtre[0] = "Tümü"
-                        secilen_kategori[0] = "Tüm Kategoriler"
-                        if hasattr(kategori_filtre_dropdown, "value"):
-                            kategori_filtre_dropdown.value = "Tüm Kategoriler"
+                            harcayan_hesap = "Hatice" if (not yonetici_mi or kullanici == "Hatice") else "Abdurrahman"
 
-                        arayuzu_guncelle()
+                            for item_idx, itm in enumerate(onay_listesi):
+                                if itm["chk"].value:
+                                    yeni_kayit = {
+                                        "kullanici": harcayan_hesap,
+                                        "tur": "Gider",
+                                        "tarih": std_tarih,
+                                        "saat": saat,
+                                        "kaynak": "",
+                                        "gelir_turu": "",
+                                        "aciklama": f"AI Fiş ({firma})",
+                                        "firma": firma,
+                                        "urun": itm["urun"],
+                                        "kategori": itm["kategori"],
+                                        "miktar": itm["miktar"],
+                                        "birim_fiyat": itm["birim_fiyat"],
+                                        "tutar": itm["tutar"]
+                                    }
 
-                        show_app_snackbar(
-                            page,
-                            f"✅ {firma} fişinden {eklenen_sayisi} kalem harcama ({eklenen_tutar:,.2f} TL) bütçeye eklendi!",
-                            color="#16a34a"
-                        )
+                                    if supabase:
+                                        try:
+                                            res = supabase.table("islemler").insert(yeni_kayit).execute()
+                                            if res and res.data and len(res.data) > 0 and res.data[0].get("id"):
+                                                yeni_kayit["id"] = int(res.data[0]["id"])
+                                        except Exception as db_err:
+                                            print("Supabase fiş kayıt hatası:", db_err)
 
-                    fis_dialog = ft.AlertDialog(
-                        title=ft.Text(f"📸 {firma} ({tarih})", size=16, weight=ft.FontWeight.BOLD),
-                        content=ft.Container(
-                            content=ft.Column([
-                                ft.Text(f"Toplam: {toplam_tutar:,.2f} TL • {len(urunler)} Kalem Tespit Edildi", size=12, color="#475569", weight=ft.FontWeight.W_500),
-                                ft.Text("Eklemek istediğiniz ürünleri seçin:", size=11, color="grey"),
+                                    if "id" not in yeni_kayit:
+                                        mevcut_idler = [int(it.get("id")) for it in islemler if str(it.get("id", "")).isdigit()]
+                                        yeni_kayit["id"] = (max(mevcut_idler) + 1 + item_idx) if mevcut_idler else (item_idx + 1)
+
+                                    islemler.insert(0, yeni_kayit)
+                                    eklenen_sayisi += 1
+                                    eklenen_tutar += itm["tutar"]
+
+                            dialog_kapat(None)
+
+                            secilen_filtre[0] = "Tümü"
+                            secilen_kategori[0] = "Tüm Kategoriler"
+                            if hasattr(kategori_filtre_dropdown, "value"):
+                                kategori_filtre_dropdown.value = "Tüm Kategoriler"
+
+                            arayuzu_guncelle()
+                            try:
+                                liste_arayuzu.update()
+                            except Exception:
+                                pass
+
+                            show_app_snackbar(
+                                page,
+                                f"✅ {firma} fişinden {eklenen_sayisi} kalem harcama ({eklenen_tutar:,.2f} TL) bütçeye eklendi!",
+                                color="#16a34a"
+                            )
+
+                        dialog_icerik_kolon = [
+                            ft.Text(f"Toplam: {toplam_tutar:,.2f} TL • {len(urunler)} Kalem Tespit Edildi", size=12, color="#475569", weight=ft.FontWeight.W_500),
+                        ]
+
+                        if kismi_mukerrer:
+                            dialog_icerik_kolon.append(
                                 ft.Container(
-                                    content=ft.Column(secim_kontrolleri, scroll=ft.ScrollMode.AUTO, spacing=2),
-                                    height=220,
-                                    border=make_border_all(1, "#e2e8f0"),
-                                    border_radius=8,
-                                    padding=4
+                                    content=ft.Row([
+                                        ft.Icon(ft.Icons.WARNING_AMBER, color="#b91c1c", size=16),
+                                        ft.Text(f"⚠️ {len(mukerrer_eslesmeler)} ürün sistemde zaten kayıtlı olduğu için işareti kaldırıldı.", size=10, color="#b91c1c", weight=ft.FontWeight.W_600, expand=True)
+                                    ], spacing=4),
+                                    bgcolor="#fef2f2",
+                                    border=make_border_all(1, "#fecaca"),
+                                    border_radius=6,
+                                    padding=6
                                 )
-                            ], spacing=6),
-                            width=330,
-                            height=280
-                        ),
-                        actions=[
-                            make_button("İptal", outlined=True, on_click=dialog_kapat),
-                            make_button("✅ Bütçeye Ekle", bgcolor="#16a34a", color="white", on_click=secilenleri_ekle)
-                        ],
-                        actions_alignment=ft.MainAxisAlignment.END
-                    )
+                            )
+                        elif tam_mukerrer:
+                            dialog_icerik_kolon.append(
+                                ft.Container(
+                                    content=ft.Row([
+                                        ft.Icon(ft.Icons.WARNING_ROUNDED, color="#b91c1c", size=16),
+                                        ft.Text("⚠️ Bu fiş sistemde zaten kayıtlı! Eklemek istediklerinizi seçiniz.", size=10, color="#b91c1c", weight=ft.FontWeight.BOLD, expand=True)
+                                    ], spacing=4),
+                                    bgcolor="#fef2f2",
+                                    border=make_border_all(1, "#fecaca"),
+                                    border_radius=6,
+                                    padding=6
+                                )
+                            )
 
-                    show_app_dialog(page, fis_dialog)
+                        dialog_icerik_kolon.extend([
+                            ft.Text("Eklemek istediğiniz ürünleri seçin:", size=11, color="grey"),
+                            ft.Container(
+                                content=ft.Column(secim_kontrolleri, scroll=ft.ScrollMode.AUTO, spacing=2),
+                                height=220,
+                                border=make_border_all(1, "#e2e8f0"),
+                                border_radius=8,
+                                padding=4
+                            )
+                        ])
+
+                        fis_dialog = ft.AlertDialog(
+                            title=ft.Text(f"📸 {firma} ({tarih} {saat_kisa})", size=16, weight=ft.FontWeight.BOLD),
+                            content=ft.Container(
+                                content=ft.Column(dialog_icerik_kolon, spacing=6),
+                                width=330,
+                                height=310
+                            ),
+                            actions=[
+                                make_button("İptal", outlined=True, on_click=dialog_kapat),
+                                make_button("✅ Bütçeye Ekle", bgcolor="#16a34a", color="white", on_click=secilenleri_ekle)
+                            ],
+                            actions_alignment=ft.MainAxisAlignment.END
+                        )
+                        show_app_dialog(page, fis_dialog)
+
+                    # Eğer fişteki tüm ürünler sistemde birebir kayıtlıysa, doğrudan mükerrerlik uyarı penceresi aç
+                    if tam_mukerrer:
+                        def mukerrer_yine_de_ac(ev):
+                            close_app_dialog(page, mukerrer_uyari_dlg)
+                            onay_dialogunu_ac(yine_de_onay=True)
+
+                        mukerrer_uyari_dlg = ft.AlertDialog(
+                            title=ft.Row([
+                                ft.Icon(ft.Icons.WARNING_ROUNDED, color="#dc2626", size=26),
+                                ft.Text("Mükerrer Fiş Uyarısı!", size=16, weight=ft.FontWeight.BOLD, color="#b91c1c")
+                            ], spacing=8),
+                            content=ft.Container(
+                                content=ft.Column([
+                                    ft.Text("⚠️ Bu fiş sistemde zaten kayıtlı görünüyor!", weight=ft.FontWeight.BOLD, size=13, color="#1e293b"),
+                                    ft.Container(
+                                        content=ft.Column([
+                                            ft.Text(f"📍 Firma: {firma}", size=11, weight=ft.FontWeight.W_600),
+                                            ft.Text(f"📅 Tarih: {std_tarih} | 🕒 Saat: {saat_kisa}", size=11, weight=ft.FontWeight.W_600),
+                                            ft.Text(f"💰 Tutar: {toplam_tutar:,.2f} TL ({len(urunler)} ürün)", size=11, weight=ft.FontWeight.W_600, color="#b91c1c")
+                                        ], spacing=2),
+                                        bgcolor="#fef2f2",
+                                        border=make_border_all(1, "#fecaca"),
+                                        border_radius=8,
+                                        padding=8
+                                    ),
+                                    ft.Text(f"Fişin saati ({saat_kisa}), tarihi ({std_tarih}) ve {len(urunler)} adet ürünü incelendiğinde bu fişin sisteme daha önce eksiksiz eklendiği tespit edildi.\n\nMükerrer kayıt ve çift harcama oluşmaması için fişi tekrar eklememeniz önerilir.", size=11, color="#475569")
+                                ], spacing=8, tight=True),
+                                width=330,
+                                padding=2
+                            ),
+                            actions=[
+                                make_button("✕ Vazgeç / Ekleme", height=36, outlined=True, on_click=lambda _: close_app_dialog(page, mukerrer_uyari_dlg)),
+                                make_button("⚠️ Yine de İncele & Ekle", height=36, bgcolor="#dc2626", color="white", on_click=mukerrer_yine_de_ac)
+                            ],
+                            actions_alignment=ft.MainAxisAlignment.END
+                        )
+                        show_app_dialog(page, mukerrer_uyari_dlg)
+                        return
+
+                    # Normal veya kısmi mükerrer durumda doğrudan onay penceresini aç
+                    onay_dialogunu_ac(yine_de_onay=False)
 
                 except Exception as th_err:
                     print("Arka plan tarama hatası:", th_err)
@@ -3245,7 +3358,13 @@ def main(page: ft.Page):
             except Exception:
                 hour, minute = 0, 0
 
-            return datetime.datetime(y, m, d, hour, minute), item.get("id") or 0
+            raw_id = item.get("id")
+            try:
+                safe_id = int(raw_id) if raw_id is not None else 0
+            except Exception:
+                safe_id = 0
+
+            return datetime.datetime(y, m, d, hour, minute), safe_id
 
 
         # --- İŞLEM DÜZENLEME MODALI ---
@@ -4606,7 +4725,6 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
             text_size=11,
             expand=True,
             dense=True,
-            border_radius=8,
             on_submit=sozel_islem_calistir
         )
 
