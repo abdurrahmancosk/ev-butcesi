@@ -1626,8 +1626,8 @@ def main(page: ft.Page):
 
         gider_hesap_secimi = make_dropdown(
             label="Harcayan Hesap (Nereden Düşsün?)",
-            options=["👑 Ev Yöneticisi (Ana Kasa)", "👤 Aile Üyesi (Üye Cüzdanı)"],
-            value="👑 Ev Yöneticisi (Ana Kasa)" if yonetici_mi else "👤 Aile Üyesi (Üye Cüzdanı)",
+            options=["👑 Abdurrahman (Ana Kasa)", "👤 Hatice (Üye Cüzdanı)"],
+            value="👑 Abdurrahman (Ana Kasa)" if yonetici_mi else "👤 Hatice (Üye Cüzdanı)",
             width=320,
             dense=True
         )
@@ -1646,8 +1646,8 @@ def main(page: ft.Page):
         # --- PARA AKTARIMI ALANLARI ---
         aktarim_alici = make_dropdown(
             label="Kime Para Aktarılacak?",
-            options=["Aile Üyesi", "Ahmet", "Ayşe", "Mehmet", "Diğer"],
-            value="Aile Üyesi",
+            options=["Hatice", "Aile Üyesi", "Ahmet", "Ayşe", "Mehmet", "Diğer"],
+            value="Hatice",
             width=320,
             dense=True
         )
@@ -3262,9 +3262,15 @@ def main(page: ft.Page):
             duzenle_tutar = ft.TextField(label="Tutar (TL)", value=str(item.get("tutar", 0.0)), width=310, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
 
             if tur == "Gider":
+                mevcut_kullanici = item.get("kullanici") or "Abdurrahman"
+                if mevcut_kullanici == "Ev Yöneticisi":
+                    mevcut_kullanici = "Abdurrahman"
+                elif mevcut_kullanici == "Aile Üyesi":
+                    mevcut_kullanici = "Hatice"
+
                 duzenle_hesap = make_dropdown(
-                    options=["Ev Yöneticisi", "Aile Üyesi"],
-                    value=item.get("kullanici") or "Ev Yöneticisi",
+                    options=["Abdurrahman", "Hatice"],
+                    value=mevcut_kullanici,
                     label="Harcayan Hesap (Kasa / Üye)",
                     width=310,
                     dense=True
@@ -3381,15 +3387,21 @@ def main(page: ft.Page):
             for item in islemler:
                 t = float(item.get("tutar") or 0.0)
                 tur = item.get("tur")
-                sahip = (item.get("kullanici") or "Ev Yöneticisi").strip()
+                sahip = (item.get("kullanici") or "Abdurrahman").strip()
+                if sahip == "Ev Yöneticisi":
+                    sahip = "Abdurrahman"
+                elif sahip == "Aile Üyesi":
+                    sahip = "Hatice"
 
                 if tur == "Gelir":
                     genel_gelir += t
                 elif tur == "Para Aktarımı":
-                    alici = item.get("kaynak") or "Aile Üyesi"
+                    alici = (item.get("kaynak") or "Hatice").strip()
+                    if alici == "Aile Üyesi":
+                        alici = "Hatice"
                     genel_kullaniciya_aktarilan[alici] = genel_kullaniciya_aktarilan.get(alici, 0.0) + t
                 elif tur == "Gider":
-                    if sahip != "Ev Yöneticisi":
+                    if sahip not in ["Abdurrahman", "Ev Yöneticisi"]:
                         genel_kullanici_harcamalari[sahip] = genel_kullanici_harcamalari.get(sahip, 0.0) + t
                     else:
                         kasa_harcamalari += t
@@ -3432,20 +3444,27 @@ def main(page: ft.Page):
                         continue
 
                 tutar = float(item.get("tutar") or 0.0)
-                islem_sahibi = item.get("kullanici") or "Bilinmeyen"
+                islem_sahibi = (item.get("kullanici") or "Abdurrahman").strip()
+                if islem_sahibi == "Ev Yöneticisi":
+                    islem_sahibi = "Abdurrahman"
+                elif islem_sahibi == "Aile Üyesi":
+                    islem_sahibi = "Hatice"
+
                 islem_turu_val = item.get("tur")
 
                 if islem_turu_val == "Gelir":
                     donem_gelir += tutar
                     toplam_donem_gelir_sayisi += 1
                 elif islem_turu_val == "Para Aktarımı":
-                    alici = item.get("kaynak") or "Aile Üyesi"
+                    alici = (item.get("kaynak") or "Hatice").strip()
+                    if alici == "Aile Üyesi":
+                        alici = "Hatice"
                     donem_kullaniciya_aktarilan[alici] = donem_kullaniciya_aktarilan.get(alici, 0.0) + tutar
                 elif islem_turu_val == "Gider":
                     donem_gider += tutar
                     donem_toplam_harcama += tutar
                     toplam_donem_gider_sayisi += 1
-                    if islem_sahibi != "Ev Yöneticisi":
+                    if islem_sahibi not in ["Abdurrahman", "Ev Yöneticisi"]:
                         donem_kullanici_harcamalari[islem_sahibi] = donem_kullanici_harcamalari.get(islem_sahibi, 0.0) + tutar
                     else:
                         donem_kasa_harcamasi += tutar
@@ -3514,7 +3533,7 @@ def main(page: ft.Page):
                     miktar_bilgisi = item.get("miktar") or ""
                     miktar_eki = f" • {miktar_bilgisi}" if (miktar_bilgisi and miktar_bilgisi != "-") else ""
                     kat_eki = f" • {item.get('kategori')}" if item.get('kategori') else ''
-                    sahip_eki = f" • 👤 {islem_sahibi}" if islem_sahibi != "Ev Yöneticisi" else " • 👑 Kasa"
+                    sahip_eki = f" • 👤 {islem_sahibi}" if islem_sahibi not in ["Abdurrahman", "Ev Yöneticisi"] else " • 👑 Kasa"
                     alt_detay = f"{zaman_metni}{kat_eki}{miktar_eki}{sahip_eki}"
                     tutar_metni = f"-{tutar:,.2f} TL"
                     tutar_rengi = "#ef4444"
@@ -3595,7 +3614,7 @@ def main(page: ft.Page):
                 # Aktarım yapılan veya harcama yapan tüm üyeleri topla
                 tum_uyeler = set(list(genel_kullaniciya_aktarilan.keys()) + list(genel_kullanici_harcamalari.keys()))
                 for u in sorted(tum_uyeler):
-                    if u == "Ev Yöneticisi":
+                    if u in ["Abdurrahman", "Ev Yöneticisi"]:
                         continue
                     aktarilan = genel_kullaniciya_aktarilan.get(u, 0.0)
                     harcanan = genel_kullanici_harcamalari.get(u, 0.0)
@@ -3821,7 +3840,7 @@ def main(page: ft.Page):
 
                 miktar_tam_metin = f"{miktar_str} {birim_val}".strip() if miktar_str else ""
 
-                secilen_hesap = "Aile Üyesi" if "Aile Üyesi" in (gider_hesap_secimi.value or "") else "Ev Yöneticisi"
+                secilen_hesap = "Hatice" if "Hatice" in (gider_hesap_secimi.value or "") or "Aile Üyesi" in (gider_hesap_secimi.value or "") else "Abdurrahman"
 
                 yeni_kayit = {
                     "kullanici": secilen_hesap,
@@ -3865,19 +3884,19 @@ def main(page: ft.Page):
             bilgi_mesaji.color = "green"
             arayuzu_guncelle()
 
-        yetki_metni = "👑 Ev Yöneticisi Paneli" if yonetici_mi else "👤 Aile Üyesi Paneli"
+        yetki_metni = f"👑 {kullanici} (Yönetici Paneli)" if yonetici_mi else f"👤 {kullanici} (Aile Üyesi Paneli)"
 
         # --- HESAP DEĞİŞTİRME VE ÇIKIŞ MERKEZİ ---
         def cikis_yap_aksiyon(e=None):
             def yoneticiye_gec(ev):
                 close_app_dialog(page, cikis_dialog)
-                oturum_kaydet("Ev Yöneticisi", True)
-                ana_ekrana_git("Ev Yöneticisi", yonetici_mi=True)
+                oturum_kaydet("Abdurrahman", True)
+                ana_ekrana_git("Abdurrahman", yonetici_mi=True)
 
             def uyeye_gec(ev):
                 close_app_dialog(page, cikis_dialog)
-                oturum_kaydet("Aile Üyesi", False)
-                ana_ekrana_git("Aile Üyesi", yonetici_mi=False)
+                oturum_kaydet("Hatice", False)
+                ana_ekrana_git("Hatice", yonetici_mi=False)
 
             def oturumu_kapat(ev):
                 close_app_dialog(page, cikis_dialog)
@@ -3885,14 +3904,14 @@ def main(page: ft.Page):
                 giris_ekranina_git()
 
             diger_rol_btn = make_button(
-                "👑 Ev Yöneticisi Hesabına Geç",
+                "👑 Abdurrahman Hesabına Geç",
                 icon=ft.Icons.ADMIN_PANEL_SETTINGS,
                 bgcolor="#2563eb",
                 color="white",
                 height=40,
                 on_click=yoneticiye_gec
             ) if not yonetici_mi else make_button(
-                "👤 Aile Üyesi Hesabına Geç",
+                "👤 Hatice Hesabına Geç",
                 icon=ft.Icons.PERSON,
                 bgcolor="#0284c7",
                 color="white",
@@ -4671,36 +4690,37 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
             page.controls.clear()
 
         # Giriş Ekranı Bileşenleri
-        kullanici_adi = ft.TextField(label="Kullanıcı Adı (yönetici / üye)", width=320)
+        kullanici_adi = ft.TextField(label="Kullanıcı Adı (Abdurrahman / Hatice)", width=320)
         sifre = ft.TextField(label="Şifre", password=True, can_reveal_password=True, width=320)
         beni_hatirla = ft.Checkbox(label="Beni Hatırla", value=True)
         hata_mesaji = ft.Text("", color="red")
 
         def giris_yap(e):
-            ad = kullanici_adi.value.strip().lower()
+            raw_ad = kullanici_adi.value.strip()
+            ad_lower = raw_ad.lower()
             pass_val = sifre.value.strip()
 
-            if ad == "yönetici" and pass_val == "1234":
+            if (raw_ad == "Abdurrahman" or ad_lower in ["abdurrahman", "yönetici"]) and pass_val == "1234":
                 if beni_hatirla.value:
-                    oturum_kaydet("Ev Yöneticisi", True)
-                ana_ekrana_git("Ev Yöneticisi", yonetici_mi=True)
-            elif ad == "üye" and pass_val == "5678":
+                    oturum_kaydet("Abdurrahman", True)
+                ana_ekrana_git("Abdurrahman", yonetici_mi=True)
+            elif (raw_ad == "Hatice" or ad_lower in ["hatice", "üye"]) and pass_val == "5678":
                 if beni_hatirla.value:
-                    oturum_kaydet("Aile Üyesi", False)
-                ana_ekrana_git("Aile Üyesi", yonetici_mi=False)
+                    oturum_kaydet("Hatice", False)
+                ana_ekrana_git("Hatice", yonetici_mi=False)
             else:
                 hata_mesaji.value = "Hatalı kullanıcı adı veya şifre!"
                 page.update()
 
         def hizli_yonetici_giris(ev):
             if beni_hatirla.value:
-                oturum_kaydet("Ev Yöneticisi", True)
-            ana_ekrana_git("Ev Yöneticisi", yonetici_mi=True)
+                oturum_kaydet("Abdurrahman", True)
+            ana_ekrana_git("Abdurrahman", yonetici_mi=True)
 
         def hizli_uye_giris(ev):
             if beni_hatirla.value:
-                oturum_kaydet("Aile Üyesi", False)
-            ana_ekrana_git("Aile Üyesi", yonetici_mi=False)
+                oturum_kaydet("Hatice", False)
+            ana_ekrana_git("Hatice", yonetici_mi=False)
 
         page.add(
             ft.Column([
@@ -4716,8 +4736,8 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                 ft.Divider(height=24, color="#e2e8f0"),
                 ft.Text("⚡ Tek Tıkla Hızlı Hesap Girişi:", size=11, color="#64748b", weight=ft.FontWeight.W_600),
                 ft.Row([
-                    make_button("👑 Yönetici", bgcolor="#2563eb", color="white", height=36, on_click=hizli_yonetici_giris),
-                    make_button("👤 Aile Üyesi", bgcolor="#0284c7", color="white", height=36, on_click=hizli_uye_giris),
+                    make_button("👑 Abdurrahman (Yönetici)", bgcolor="#2563eb", color="white", height=36, on_click=hizli_yonetici_giris),
+                    make_button("👤 Hatice (Aile Üyesi)", bgcolor="#0284c7", color="white", height=36, on_click=hizli_uye_giris),
                 ], alignment=ft.MainAxisAlignment.CENTER, spacing=10)
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER)
         )
