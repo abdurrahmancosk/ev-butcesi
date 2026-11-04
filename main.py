@@ -560,7 +560,34 @@ GIDER_KATEGORILERI = [
 ]
 kategoriler = GIDER_KATEGORILERI
 
-GEMINI_API_KEY = "AQ.Ab8RN6INNOQBkceaWeS3U1xKw8cLWYtnlW4dEm9x6sAw9HSpZw"
+GEMINI_KEY_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "gemini_key.json")
+
+def gemini_api_key_al():
+    """Kullanıcının yerel olarak saklanan veya ortamdaki Gemini API anahtarını güvenle çeker."""
+    if os.path.exists(GEMINI_KEY_DOSYASI):
+        try:
+            with open(GEMINI_KEY_DOSYASI, "r", encoding="utf-8") as f:
+                d = json.load(f)
+                k = d.get("api_key", "").strip()
+                if k:
+                    return k
+        except Exception:
+            pass
+    if "GEMINI_API_KEY" in os.environ and os.environ["GEMINI_API_KEY"].strip():
+        return os.environ["GEMINI_API_KEY"].strip()
+    return ""
+
+def gemini_api_key_kaydet(key_val):
+    """API anahtarını cihazın yerel güvenli deposuna kaydeder (GitHub'a asla yüklenmez)."""
+    try:
+        with open(GEMINI_KEY_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump({"api_key": key_val.strip()}, f, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print("Gemini API anahtarı kaydedilemedi:", e)
+        return False
+
+GEMINI_API_KEY = gemini_api_key_al()
 
 def gemini_aktif_modelleri_bul(api_key, ssl_context=None):
     """Kullanıcının API anahtarına tanımlı modelleri Google'dan çeker ve yalnızca ücretsiz/hızlı Gemini Flash modellerini seçer."""
@@ -625,7 +652,9 @@ def gemini_aktif_modelleri_bul(api_key, ssl_context=None):
         ]
     return sirali
 
-def gemini_fis_analiz_et(gorsel_yolu, api_key=GEMINI_API_KEY, status_cb=None):
+def gemini_fis_analiz_et(gorsel_yolu, api_key=None, status_cb=None):
+    if not api_key:
+        api_key = gemini_api_key_al()
     """Fiş veya fatura görselini/PDF'ini Google Gemini Flash modeli ile analiz eder."""
     import base64
     import urllib.request
@@ -2230,7 +2259,48 @@ def main(page: ft.Page):
                 close_app_dialog(page, fis_dialog)
                 fis_gorselini_tara_ve_goster(yol)
 
-            dialog_icerik = [
+            aktif_key = gemini_api_key_al()
+            api_key_tf = ft.TextField(
+                label="🔑 Gemini AI API Anahtarı",
+                value=aktif_key or "",
+                password=True,
+                can_reveal_password=True,
+                text_size=11,
+                dense=True,
+                hint_text="Google AI Studio'dan aldığınız anahtarı yapıştırın"
+            )
+
+            def api_keyi_kaydet_aksiyon(ev):
+                val = api_key_tf.value.strip()
+                if val:
+                    gemini_api_key_kaydet(val)
+                    show_app_snackbar(page, "✅ Gemini API anahtarı cihaza kaydedildi!", color="#10b981")
+                else:
+                    show_app_snackbar(page, "Lütfen geçerli bir anahtar girin.", color="#ef4444")
+
+            dialog_icerik = []
+
+            # Eğer anahtar kayıtlı değilse en üstte dikkat çekici uyarı kutusu göster
+            if not aktif_key:
+                dialog_icerik.append(
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Row([
+                                ft.Icon(ft.Icons.KEY, color="#f59e0b", size=18),
+                                ft.Text("Gemini API Anahtarı Gerekli", weight=ft.FontWeight.BOLD, size=12, color="#92400e")
+                            ], spacing=6),
+                            ft.Text("Google, GitHub'daki eski anahtarı güvenlik nedeniyle iptal etti. Google AI Studio'dan 10 saniyede ücretsiz yeni bir anahtar alıp buraya yapıştırın:", size=10, color="#78350f"),
+                            api_key_tf,
+                            make_button("💾 Anahtarı Güvenle Kaydet", bgcolor="#f59e0b", color="white", height=30, on_click=api_keyi_kaydet_aksiyon)
+                        ], spacing=6),
+                        bgcolor="#fffbeb",
+                        border=make_border_all(1, "#fde68a"),
+                        border_radius=8,
+                        padding=8
+                    )
+                )
+
+            dialog_icerik.append(
                 ft.Container(
                     content=ft.Row([
                         ft.Icon(ft.Icons.INFO_OUTLINE, size=14, color="#64748b"),
@@ -2238,7 +2308,7 @@ def main(page: ft.Page):
                     ], spacing=4),
                     padding=make_padding(0, 2)
                 )
-            ]
+            )
 
             # 1. Telefon Galerisindeki Son Fotoğraflar (Kamerayla yeni çekilenler)
             if son_fotolar:
@@ -2303,7 +2373,11 @@ def main(page: ft.Page):
                     outlined=True,
                     height=32,
                     on_click=manuel_yol_tara
-                )
+                ),
+                ft.Divider(height=10, color="#e2e8f0"),
+                ft.Text("🔑 API Anahtarı Ayarı (Cihazda Saklanır):", size=10, color="#64748b"),
+                api_key_tf,
+                make_button("💾 Anahtarı Güncelle", outlined=True, height=30, on_click=api_keyi_kaydet_aksiyon)
             ])
 
             fis_dialog = ft.AlertDialog(
