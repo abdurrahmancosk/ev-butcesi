@@ -34,6 +34,8 @@ if not hasattr(ft, "KeyboardType"):
     ft.KeyboardType = _KeyboardTypeNamespace
 
 
+
+
 # Compatibility shims for Flet 1.0+
 if hasattr(ft, "Border"):
     if not hasattr(ft, "border"):
@@ -161,17 +163,29 @@ def make_button(text, icon=None, bgcolor=None, color=None, width=None, height=No
     if btn_cls is None:
         btn_cls = getattr(ft, "Button", getattr(ft, "OutlinedButton", getattr(ft, "ElevatedButton", None)))
 
-    # On_click sarmalayıcısı ile dokunma geri bildirimi (haptic) ekle
+    # On_click sarmalayıcısı ile dokunma geri bildirimi (haptic) ve coroutine desteği
     wrapped_on_click = None
     if on_click is not None:
         def _tiklama_tetikle(e):
             dokunma_geribildirimi()
+            res = None
             try:
-                on_click(e)
+                res = on_click(e)
             except TypeError:
-                on_click()
+                res = on_click()
             except Exception as ex_btn:
                 print("Buton tıklama hatası:", ex_btn)
+                return
+
+            if res is not None and asyncio.iscoroutine(res):
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(res)
+                except Exception:
+                    try:
+                        asyncio.create_task(res)
+                    except Exception:
+                        threading.Thread(target=lambda: asyncio.run(res), daemon=True).start()
         wrapped_on_click = _tiklama_tetikle
 
     style_obj = None
@@ -209,12 +223,24 @@ def make_icon_btn(icon, on_click=None, icon_color=None, icon_size=20, tooltip=No
     if on_click is not None:
         def _icon_tiklandi(e):
             dokunma_geribildirimi()
+            res = None
             try:
-                on_click(e)
+                res = on_click(e)
             except TypeError:
-                on_click()
+                res = on_click()
             except Exception as ex_i:
                 print("Simge tıklama hatası:", ex_i)
+                return
+
+            if res is not None and asyncio.iscoroutine(res):
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(res)
+                except Exception:
+                    try:
+                        asyncio.create_task(res)
+                    except Exception:
+                        threading.Thread(target=lambda: asyncio.run(res), daemon=True).start()
         wrapped = _icon_tiklandi
     return ft.IconButton(
         icon=icon,
@@ -350,6 +376,25 @@ def set_button_label(btn, new_text):
 BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in locals() or "__file__" in globals() else "."
 OTURUM_DOSYASI = os.path.join(BASE_DIR, "oturum.json")
 HARCLIK_AYARLARI_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "harclik_ayarlari.json")
+TEMA_AYARI_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "tema_ayari.json")
+
+def tema_oku():
+    if os.path.exists(TEMA_AYARI_DOSYASI):
+        try:
+            with open(TEMA_AYARI_DOSYASI, "r", encoding="utf-8") as f:
+                d = json.load(f)
+                return d.get("tema", "system")
+        except Exception:
+            pass
+    return "system"
+
+def tema_kaydet(tema_val):
+    try:
+        with open(TEMA_AYARI_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump({"tema": tema_val}, f)
+    except Exception as ex:
+        print("Tema kaydetme hatası:", ex)
+
 
 def harclik_ayarlari_oku():
     varsayilan = {
@@ -1215,6 +1260,131 @@ def hafiza_olustur(islemler_listesi):
     return hafiza
 
 def parse_sozel_ifade_yerel(cumle, fiyat_hafizasi):
+    """Gelişmiş çevrimdışı / anlık akıllı kural tabanlı sözel ifade ayrıştırıcı."""
+    c = str(cumle or "").strip()
+    c_lower = c.lower()
+    
+    # İşlem türü belirleme
+    tur = "Gider"
+    if any(k in c_lower for k in ["maaş", "maas", "ek ders", "yattı", "yatti", "gelir", "ödenek"]):
+        tur = "Gelir"
+    elif any(k in c_lower for k in ["aktar", "gönder", "gonder", "havale", "eft", "harçlık ver", "harclik ver"]):
+        tur = "Para Aktarımı"
+
+    # Saat tespiti
+    saat_str = datetime.datetime.now().strftime("%H:%M")
+    saat_match = re.search(r'\b([01]?\d|2[0-3])[:.]([0-5]\d)\b', c)
+    if saat_match:
+        saat_str = f"{int(saat_match.group(1)):02d}:{int(saat_match.group(2)):02d}"
+
+    # Tarih tespiti (bugün / dün / gg.aa)
+    bugun_dt = datetime.date.today()
+    if "dün" in c_lower or "dun" in c_lower:
+        tarih_str = (bugun_dt - datetime.timedelta(days=1)).strftime("%d.%m.%Y")
+    else:
+        t_match = re.search(r'\b(0?[1-9]|[12]\d|3[01])[./](0?[1-9]|1[0-2])([./](\d{4}))?\b', c)
+        if t_match:
+            d_val = int(t_match.group(1))
+            m_val = int(t_match.group(2))
+            y_val = int(t_match.group(4)) if t_match.group(4) else bugun_dt.year
+            tarih_str = f"{d_val:02d}.{m_val:02d}.{y_val}"
+        else:
+            tarih_str = bugun_dt.strftime("%d.%m.%Y")
+
+    # Firma tespiti
+    firmalar = [
+        ("bim", "BİM"), ("bi̇m", "BİM"), ("a101", "A101"), ("şok", "ŞOK"), ("sok", "ŞOK"),
+        ("migros", "Migros"), ("carrefour", "Carrefour"), ("düzgün", "Düzgün Market"),
+        ("tarım kredi", "Tarım Kredi"), ("tarim kredi", "Tarım Kredi"), ("pazar", "Pazar"),
+        ("fırın", "Fırın"), ("firin", "Fırın"), ("eczane", "Eczane"), ("shell", "Shell"),
+        ("opet", "Opet"), ("bp", "BP"), ("petrol", "Petrol"), ("palen", "Palen Doğalgaz"),
+        ("türk telekom", "Türk Telekom"), ("vodafone", "Vodafone"), ("turkcell", "Turkcell"),
+        ("nakit", "Nakit"), ("okul", "Okul")
+    ]
+    bulunan_firma = "Market"
+    for k, f_ad in firmalar:
+        if k in c_lower:
+            bulunan_firma = f_ad
+            break
+
+    # Miktar tespiti
+    miktar_sayi = 1.0
+    miktar_str = "1 adet"
+    m_match = re.search(r'\b(\d+([.,]\d+)?)\s*(adet|tane|koli|kilo|kg|paket|ekmek|litre|lt|porsiyon)\b', c_lower)
+    if m_match:
+        miktar_sayi = float(m_match.group(1).replace(",", "."))
+        birim_ad = m_match.group(3)
+        if birim_ad in ["ekmek"]:
+            miktar_str = f"{int(miktar_sayi) if miktar_sayi==int(miktar_sayi) else miktar_sayi} adet"
+        else:
+            miktar_str = f"{int(miktar_sayi) if miktar_sayi==int(miktar_sayi) else miktar_sayi} {birim_ad}"
+    else:
+        # Sayı varsa doğrudan miktar olarak al
+        sayi_match = re.search(r'\b(\d+)\s+([a-zA-ZçğıöşüÇĞİÖŞÜ]+)', c_lower)
+        if sayi_match and sayi_match.group(2) not in ["tl", "lira", "liraya", "saat", "de", "da", "te", "ta"]:
+            miktar_sayi = float(sayi_match.group(1))
+            miktar_str = f"{int(miktar_sayi)} adet"
+
+    # Fiyat / Tutar tespiti
+    toplam_tutar = 0.0
+    birim_fiyat = 0.0
+    fiyat_match = re.search(r'\b(\d+([.,]\d{1,2})?)\s*(tl|lira|liraya|liralık|liralk)\b', c_lower)
+    if fiyat_match:
+        toplam_tutar = float(fiyat_match.group(1).replace(",", "."))
+        birim_fiyat = toplam_tutar / miktar_sayi if miktar_sayi else toplam_tutar
+    else:
+        # Cümlenin sonundaki bağımsız sayı tutar olabilir (örn: 'bim süt 45')
+        son_sayi = re.findall(r'\b(\d+([.,]\d{1,2})?)\b', c_lower)
+        if son_sayi:
+            for s_tuple in reversed(son_sayi):
+                val_cand = float(s_tuple[0].replace(",", "."))
+                if val_cand != miktar_sayi and ":" not in s_tuple[0] and "." not in s_tuple[0]:
+                    toplam_tutar = val_cand
+                    birim_fiyat = toplam_tutar / miktar_sayi if miktar_sayi else toplam_tutar
+                    break
+
+    # Ürün tespiti
+    urun_adi = "Genel Harcama"
+    bilinen_urunler = [
+        "ekmek", "süt", "sut", "yumurta", "peynir", "yoğurt", "yogurt", "çay", "cay",
+        "tost", "benzin", "mazot", "su", "kahve", "simit", "sigara", "deterjan", "yağ", "yag",
+        "makarna", "pirinç", "pirinc", "un", "şeker", "seker", "tavuk", "et", "kıyma", "kiyma"
+    ]
+    for u_word in bilinen_urunler:
+        if u_word in c_lower:
+            urun_adi = u_word.title()
+            break
+
+    # Hafızadan fiyat tamamlama
+    if toplam_tutar == 0.0 and urun_adi != "Genel Harcama":
+        for k_key, d in fiyat_hafizasi.items():
+            f_k = (d.get("firma") or "").lower()
+            u_k = (d.get("urun") or "").lower()
+            if (bulunan_firma.lower() in f_k or not bulunan_firma) and (urun_adi.lower() in u_k):
+                try:
+                    bf_hafiza = float(str(d.get("birim_fiyat") or 0.0).replace(",", "."))
+                    if bf_hafiza > 0:
+                        birim_fiyat = bf_hafiza
+                        toplam_tutar = birim_fiyat * miktar_sayi
+                        break
+                except Exception:
+                    pass
+
+    kat = kategori_akilli_duzelt(urun_adi, bulunan_firma)
+
+    return {
+        "tur": tur,
+        "firma": bulunan_firma,
+        "urun": urun_adi,
+        "miktar": miktar_str,
+        "birim_fiyat": f"{birim_fiyat:.2f}" if birim_fiyat else "",
+        "tutar": float(toplam_tutar),
+        "tarih": tarih_str,
+        "saat": saat_str,
+        "kategori": kat
+    }
+
+def _eski_parse_sozel_ifade_yerel(cumle, fiyat_hafizasi):
     """Çevrimdışı / anlık akıllı kural tabanlı sözel ifade ayrıştırıcı."""
     c = cumle.strip()
     
@@ -1447,8 +1617,16 @@ def main(page: ft.Page):
     def ana_ekrana_git(kullanici, yonetici_mi):
         page.clean()
         page.scroll = ft.ScrollMode.AUTO
-        page.bgcolor = "#f1f5f9"
-        page.theme_mode = ft.ThemeMode.LIGHT
+        aktif_tema_modu = tema_oku()
+        if aktif_tema_modu == "light":
+            page.theme_mode = ft.ThemeMode.LIGHT
+            page.bgcolor = "#f8fafc"
+        elif aktif_tema_modu == "dark":
+            page.theme_mode = ft.ThemeMode.DARK
+            page.bgcolor = "#0b1329"
+        else:
+            page.theme_mode = ft.ThemeMode.SYSTEM
+            page.bgcolor = None
 
         # Aktif Bütçe Dönemi Durumu
         varsayilan_bas, varsayilan_bit = aktif_butce_donemini_bul()
@@ -3534,18 +3712,218 @@ def main(page: ft.Page):
             tum_zamanlar_modu[0] = not tum_zamanlar_modu[0]
             arayuzu_guncelle()
 
-        # --- LİSTE HIZLI KAYDIRMA (EN BAŞA / EN SONA) ---
-        def listeyi_basa_sar(e):
-            try:
-                liste_arayuzu.scroll_to(offset=0, duration=300)
-            except Exception:
-                pass
+        # --- ÖZEL TARİH ARALIĞI SEÇİM MODALI (ÖRN: 3 EKİM - 20 EKİM) ---
+        def tarih_araligi_secim_modal_ac(e=None):
+            dokunma_geribildirimi()
 
-        def listeyi_sona_sar(e):
+            vars_bas = secilen_donem_bas[0] or datetime.date.today()
+            vars_bit = secilen_donem_bit[0] or datetime.date.today()
+
+            bas_tf = ft.TextField(
+                label="Başlangıç Tarihi",
+                value=vars_bas.strftime("%d.%m.%Y"),
+                width=140,
+                dense=True,
+                hint_text="03.10.2026"
+            )
+            bit_tf = ft.TextField(
+                label="Bitiş Tarihi",
+                value=vars_bit.strftime("%d.%m.%Y"),
+                width=140,
+                dense=True,
+                hint_text="20.10.2026"
+            )
+
+            def bas_takvim_secildi(ev):
+                if ev.control.value:
+                    val = ev.control.value
+                    d = val.date() if isinstance(val, datetime.datetime) else val
+                    bas_tf.value = d.strftime("%d.%m.%Y")
+                    try:
+                        bas_tf.update()
+                    except Exception:
+                        pass
+
+            def bit_takvim_secildi(ev):
+                if ev.control.value:
+                    val = ev.control.value
+                    d = val.date() if isinstance(val, datetime.datetime) else val
+                    bit_tf.value = d.strftime("%d.%m.%Y")
+                    try:
+                        bit_tf.update()
+                    except Exception:
+                        pass
+
+            bas_picker = ft.DatePicker(
+                on_change=bas_takvim_secildi,
+                first_date=datetime.datetime(2020, 1, 1),
+                last_date=datetime.datetime(2035, 12, 31)
+            )
+            bit_picker = ft.DatePicker(
+                on_change=bit_takvim_secildi,
+                first_date=datetime.datetime(2020, 1, 1),
+                last_date=datetime.datetime(2035, 12, 31)
+            )
+
+            def onayar_uygula(bas_d, bit_d):
+                bas_tf.value = bas_d.strftime("%d.%m.%Y")
+                bit_tf.value = bit_d.strftime("%d.%m.%Y")
+                try:
+                    bas_tf.update()
+                    bit_tf.update()
+                except Exception:
+                    pass
+
+            bugun_d = datetime.date.today()
+            btn_bu_ay = make_button("📅 Bütçe Dönemi", height=28, outlined=True, on_click=lambda _: onayar_uygula(*aktif_butce_donemini_bul()))
+            btn_son_30 = make_button("Son 30 Gün", height=28, outlined=True, on_click=lambda _: onayar_uygula(bugun_d - datetime.timedelta(days=30), bugun_d))
+            btn_son_7 = make_button("Son 7 Gün", height=28, outlined=True, on_click=lambda _: onayar_uygula(bugun_d - datetime.timedelta(days=7), bugun_d))
+
+            def aralik_filtrele(ev):
+                b_date = stringden_tarih_al(bas_tf.value)
+                e_date = stringden_tarih_al(bit_tf.value)
+
+                if not b_date or not e_date:
+                    show_app_snackbar(page, "Lütfen geçerli başlangıç ve bitiş tarihleri giriniz (Örn: 03.10.2026).", color="#ef4444")
+                    return
+
+                if b_date > e_date:
+                    b_date, e_date = e_date, b_date
+
+                secilen_donem_bas[0] = b_date
+                secilen_donem_bit[0] = e_date
+                tum_zamanlar_modu[0] = False
+
+                close_app_dialog(page, tarih_dialog)
+                arayuzu_guncelle()
+                show_app_snackbar(page, f"📅 {b_date.strftime('%d.%m.%Y')} - {e_date.strftime('%d.%m.%Y')} aralığı filtrelendi!", color="#10b981")
+
+            tarih_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.DATE_RANGE_ROUNDED, color="#2563eb", size=22),
+                    ft.Text("Özel Tarih Aralığı Seç", size=16, weight=ft.FontWeight.BOLD)
+                ], spacing=8),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Text("Başlangıç ve bitiş tarihlerini belirleyin (Örn: 3 Ekim - 20 Ekim):", size=11, color="#64748b"),
+                        ft.Row([
+                            ft.Column([
+                                bas_tf,
+                                make_button("📅 Takvim", height=28, outlined=True, on_click=lambda _: picker_ac(bas_picker))
+                            ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                            ft.Column([
+                                bit_tf,
+                                make_button("📅 Takvim", height=28, outlined=True, on_click=lambda _: picker_ac(bit_picker))
+                            ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+                        ], spacing=8, alignment=ft.MainAxisAlignment.CENTER),
+                        ft.Divider(height=6, color="#e2e8f0"),
+                        ft.Text("Hızlı Seçenekler:", size=10.5, color="#64748b", weight=ft.FontWeight.W_600),
+                        ft.Row([btn_bu_ay, btn_son_30, btn_son_7], spacing=6, wrap=True)
+                    ], spacing=10, tight=True),
+                    width=330
+                ),
+                actions=[
+                    make_button("✕ İptal", height=34, outlined=True, on_click=lambda _: close_app_dialog(page, tarih_dialog)),
+                    make_button("🔍 Filtrele", height=34, bgcolor="#2563eb", color="white", on_click=aralik_filtrele)
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+            show_app_dialog(page, tarih_dialog)
+
+        # --- LİSTE HIZLI KAYDIRMA (EN BAŞA / EN SONA - %100 ÇALIŞIR) ---
+        def listeyi_basa_sar(e=None):
+            dokunma_geribildirimi()
+
+            async def _scroll_top_async():
+                # 1. liste_arayuzu kaydırması
+                if hasattr(liste_arayuzu, "scroll_to"):
+                    try:
+                        r = liste_arayuzu.scroll_to(offset=0, duration=200)
+                        if asyncio.iscoroutine(r):
+                            await r
+                    except Exception:
+                        pass
+                    try:
+                        r = liste_arayuzu.scroll_to(scroll_key="liste_basi", duration=200)
+                        if asyncio.iscoroutine(r):
+                            await r
+                    except Exception:
+                        pass
+                # 2. page kaydırması
+                if hasattr(page, "scroll_to"):
+                    try:
+                        r = page.scroll_to(offset=0, duration=200)
+                        if asyncio.iscoroutine(r):
+                            await r
+                    except Exception:
+                        pass
+                try:
+                    liste_arayuzu.update()
+                except Exception:
+                    pass
+                try:
+                    page.update()
+                except Exception:
+                    pass
+
             try:
-                liste_arayuzu.scroll_to(offset=-1, duration=300)
+                loop = asyncio.get_running_loop()
+                loop.create_task(_scroll_top_async())
             except Exception:
-                pass
+                try:
+                    asyncio.create_task(_scroll_top_async())
+                except Exception:
+                    threading.Thread(target=lambda: asyncio.run(_scroll_top_async()), daemon=True).start()
+
+        def listeyi_sona_sar(e=None):
+            dokunma_geribildirimi()
+
+            async def _scroll_bottom_async():
+                # 1. liste_arayuzu kaydırması (offset=-1 veya delta)
+                if hasattr(liste_arayuzu, "scroll_to"):
+                    try:
+                        r = liste_arayuzu.scroll_to(offset=-1, duration=200)
+                        if asyncio.iscoroutine(r):
+                            await r
+                    except Exception:
+                        pass
+                    try:
+                        r = liste_arayuzu.scroll_to(delta=100000, duration=200)
+                        if asyncio.iscoroutine(r):
+                            await r
+                    except Exception:
+                        pass
+                    try:
+                        r = liste_arayuzu.scroll_to(scroll_key="liste_sonu", duration=200)
+                        if asyncio.iscoroutine(r):
+                            await r
+                    except Exception:
+                        pass
+                # 2. page kaydırması
+                if hasattr(page, "scroll_to"):
+                    try:
+                        r = page.scroll_to(offset=-1, duration=200)
+                        if asyncio.iscoroutine(r):
+                            await r
+                    except Exception:
+                        pass
+                try:
+                    liste_arayuzu.update()
+                except Exception:
+                    pass
+                try:
+                    page.update()
+                except Exception:
+                    pass
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_scroll_bottom_async())
+            except Exception:
+                try:
+                    asyncio.create_task(_scroll_bottom_async())
+                except Exception:
+                    threading.Thread(target=lambda: asyncio.run(_scroll_bottom_async()), daemon=True).start()
 
         # --- KRONOLOJİK SIRALAMA YARDIMCISI ---
         def islem_siralama_anahtari(item):
@@ -3806,6 +4184,7 @@ def main(page: ft.Page):
         # --- ARAYÜZ VE BAKİYE HESAPLAMA ---
         def arayuzu_guncelle():
             liste_arayuzu.controls.clear()
+            liste_arayuzu.controls.append(ft.Container(key="liste_basi", height=0))
 
             # 1. TÜM ZAMANLAR KÜMÜLATİF BAKİYE (Eldeki Gerçek Toplam Nakit / Kasa)
             # Kural: Harcama Aile Üyesi hesabından kaydedilirse o üyenin hesabından düşer; aksi durumda (Ev Yöneticisi) toplam kasadan düşer.
@@ -3851,14 +4230,14 @@ def main(page: ft.Page):
             donem_toplam_harcama = 0.0
 
             # Dönem başlığı güncellemesi (Kompakt ve Şık Format)
-            bas_kisa = secilen_donem_bas[0].strftime("%d.%m")
-            bit_tam = secilen_donem_bit[0].strftime("%d.%m.%Y")
+            bas_str = secilen_donem_bas[0].strftime("%d.%m.%Y")
+            bit_str = secilen_donem_bit[0].strftime("%d.%m.%Y")
             if tum_zamanlar_modu[0]:
-                donem_metni.value = "📅 Tüm Zamanlar (Filtresiz)"
-                set_button_label(donem_toggle_btn, "📅 Seçili Döneme Dön")
+                donem_metni.value = "🌐 Tüm Zamanlar (Filtresiz)"
+                set_button_label(donem_toggle_btn, f"📅 Döneme Dön ({bas_str[:5]} - {bit_str[:5]})")
             else:
-                donem_metni.value = f"📅 {bas_kisa} - {bit_tam}"
-                set_button_label(donem_toggle_btn, "🌐 Tüm Zamanları Gör (Filtresiz)")
+                donem_metni.value = f"📅 {bas_str} - {bit_str}"
+                set_button_label(donem_toggle_btn, "🌐 Tüm Zamanlar")
 
             # Döneme uyan kayıtları topla, istatistikleri ve filtreleri hesapla
             toplam_donem_gelir_sayisi = 0
@@ -3960,11 +4339,8 @@ def main(page: ft.Page):
                     firma_adi = item.get("firma") or "Gider"
                     urun_adi = item.get("urun") or ""
                     baslik = f"{firma_adi} - {urun_adi}" if (urun_adi and urun_adi != firma_adi) else firma_adi
-                    miktar_bilgisi = item.get("miktar") or ""
-                    miktar_eki = f" • {miktar_bilgisi}" if (miktar_bilgisi and miktar_bilgisi != "-") else ""
-                    kat_eki = f" • {item.get('kategori')}" if item.get('kategori') else ''
-                    sahip_eki = f" • 👤 {islem_sahibi}" if islem_sahibi not in ["Abdurrahman", "Ev Yöneticisi"] else " • 👑 Kasa"
-                    alt_detay = f"{zaman_metni}{kat_eki}{miktar_eki}{sahip_eki}"
+                    kat_adi = item.get('kategori') or "Diğer"
+                    alt_detay = f"{zaman_metni} • {kat_adi}"
                     tutar_metni = f"-{tutar:,.2f} TL"
                     tutar_rengi = "#ef4444"
                     ikon_adi = ft.Icons.ARROW_DOWNWARD
@@ -3976,8 +4352,8 @@ def main(page: ft.Page):
                     icon=ft.Icons.EDIT_OUTLINED,
                     icon_color="#2563eb",
                     icon_size=18,
-                    width=26,
-                    height=26,
+                    width=28,
+                    height=28,
                     padding=0,
                     visible=can_modify,
                     tooltip="Düzenle / Kategori Değiştir",
@@ -3988,36 +4364,84 @@ def main(page: ft.Page):
                     icon=ft.Icons.DELETE_OUTLINE,
                     icon_color="#ef4444",
                     icon_size=18,
-                    width=26,
-                    height=26,
+                    width=28,
+                    height=28,
                     padding=0,
                     visible=can_modify,
                     tooltip="Sil",
                     on_click=lambda e, it=item: silme_onayi_iste(it)
                 )
 
+                # Kimin işlem yaptığı ve miktar/birim fiyat etiketleri
+                sahip_badge_metni = "👑 Abdurrahman" if islem_sahibi in ["Abdurrahman", "Ev Yöneticisi"] else "👤 Hatice"
+                sahip_badge_bg = "#eff6ff" if islem_sahibi in ["Abdurrahman", "Ev Yöneticisi"] else "#f0fdf4"
+                sahip_badge_color = "#2563eb" if islem_sahibi in ["Abdurrahman", "Ev Yöneticisi"] else "#16a34a"
+
+                miktar_val_str = str(item.get("miktar") or "").strip()
+                raw_bf = item.get("birim_fiyat")
+                bf_float = parse_turk_tutari(raw_bf)
+
+                # Birim fiyat sıfır veya tanımsız ise tutar ve miktardan otomatik hesapla
+                if bf_float <= 0 and tutar > 0 and miktar_val_str:
+                    m_match = re.search(r'[-+]?\d*\.?\d+', miktar_val_str.replace(",", "."))
+                    if m_match:
+                        try:
+                            m_num = float(m_match.group(0))
+                            if m_num > 0:
+                                bf_float = tutar / m_num
+                                item["birim_fiyat"] = f"{bf_float:.2f}"
+                        except Exception:
+                            pass
+
+                birim_detay_str = ""
+                if miktar_val_str and bf_float > 0:
+                    birim_detay_str = f"{miktar_val_str} × {format_turk_para(bf_float)} TL"
+                elif bf_float > 0:
+                    birim_detay_str = f"Birim: {format_turk_para(bf_float)} TL"
+                elif miktar_val_str and miktar_val_str != "-":
+                    birim_detay_str = miktar_val_str
+
+                alt_etiketler = [
+                    ft.Container(
+                        content=ft.Text(sahip_badge_metni, size=9.5, color=sahip_badge_color, weight=ft.FontWeight.W_600),
+                        bgcolor=sahip_badge_bg,
+                        border_radius=6,
+                        padding=make_padding(4, 2)
+                    )
+                ]
+                if birim_detay_str:
+                    alt_etiketler.append(
+                        ft.Container(
+                            content=ft.Text(f"📦 {birim_detay_str}", size=9.5, color="#475569", weight=ft.FontWeight.W_500),
+                            bgcolor="#f1f5f9",
+                            border_radius=6,
+                            padding=make_padding(4, 2)
+                        )
+                    )
+
                 satir = ft.Container(
                     content=ft.Row([
                         ft.Row([
                             ft.Container(
                                 content=ft.Icon(ikon_adi, color=ikon_renk, size=15),
-                                width=28,
-                                height=28,
+                                width=30,
+                                height=30,
                                 bgcolor=ikon_bg,
-                                border_radius=14,
+                                border_radius=15,
                                 alignment=get_alignment_center()
                             ),
                             ft.Column([
-                                ft.Text(baslik, size=12.5, weight=ft.FontWeight.W_600, color="#0f172a", no_wrap=True, max_lines=1),
-                                ft.Text(alt_detay, size=10, color="#64748b", no_wrap=True, max_lines=1)
-                            ], spacing=1, tight=True, expand=True)
-                        ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER, expand=True),
-                        ft.Row([
+                                # Uzun ürün isimleri kesilmesin diye wrap=True ve max_lines=2
+                                ft.Text(baslik, size=12.5, weight=ft.FontWeight.W_600, color="#0f172a", max_lines=2),
+                                ft.Text(alt_detay, size=10, color="#64748b"),
+                                ft.Row(alt_etiketler, spacing=4, wrap=True)
+                            ], spacing=2, tight=True, expand=True)
+                        ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START, expand=True),
+                        ft.Column([
                             ft.Text(tutar_metni, size=12.5, weight=ft.FontWeight.BOLD, color=tutar_rengi),
-                            duzenle_butonu,
-                            sil_butonu
-                        ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            ft.Row([duzenle_butonu, sil_butonu], spacing=2)
+                        ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.END)
+                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.START),
                     padding=make_padding(8, 6),
                     bgcolor="#f8fafc",
                     border=make_border_all(1, "#f1f5f9"),
@@ -4025,6 +4449,7 @@ def main(page: ft.Page):
                 )
                 liste_arayuzu.controls.append(satir)
 
+            liste_arayuzu.controls.append(ft.Container(key="liste_sonu", height=0))
             if gosterilen_sayisi == 0:
                 liste_arayuzu.controls.append(
                     ft.Container(
@@ -4412,22 +4837,29 @@ def main(page: ft.Page):
 
             threading.Thread(target=_arkaplan_yenile, daemon=True).start()
 
-        # Modern Dönem Seçim Çubuğu (Zarif Oklar, Temiz Tipografi ve Ferah Tasarım)
+        # Modern Dönem ve Özel Tarih Aralığı Seçim Çubuğu
         onceki_btn = make_icon_btn(ft.Icons.CHEVRON_LEFT_ROUNDED, icon_size=24, icon_color="#475569", tooltip="Önceki Bütçe Dönemi", on_click=lambda _: donem_kaydir("onceki"))
         sonraki_btn = make_icon_btn(ft.Icons.CHEVRON_RIGHT_ROUNDED, icon_size=24, icon_color="#475569", tooltip="Sonraki Bütçe Dönemi", on_click=lambda _: donem_kaydir("sonraki"))
-        donem_toggle_btn = make_button("🌐 Tüm Zamanlar (Filtresiz)", height=30, outlined=True, on_click=tum_zamanlar_toggle)
+        
+        tarih_araligi_btn = make_button("📅 Özel Tarih Aralığı", height=30, outlined=True, tooltip="3 Ekim - 20 Ekim gibi istediğiniz tarih aralığını seçin", on_click=tarih_araligi_secim_modal_ac)
+        donem_toggle_btn = make_button("🌐 Tüm Zamanlar", height=30, outlined=True, tooltip="Filtresiz tüm geçmiş kayıtları göster", on_click=tum_zamanlar_toggle)
 
         donem_bar = ft.Container(
             content=ft.Column([
                 ft.Row([
                     onceki_btn,
-                    donem_metni,
+                    ft.Container(
+                        content=donem_metni,
+                        on_click=tarih_araligi_secim_modal_ac,
+                        tooltip="Tarih Aralığını Değiştirmek İçin Dokunun"
+                    ),
                     sonraki_btn,
                 ], alignment=ft.MainAxisAlignment.CENTER, spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Row([
+                    tarih_araligi_btn,
                     donem_toggle_btn
-                ], alignment=ft.MainAxisAlignment.CENTER)
-            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=6)
+            ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             bgcolor="white",
             border=make_border_all(1, "#e2e8f0"),
             border_radius=16,
@@ -4457,26 +4889,30 @@ def main(page: ft.Page):
         toplu_sil_btn = make_button("🗑️ Toplu Sil", height=30, bgcolor="#ef4444", color="white", tooltip="Listelenen Kayıtları Kalıcı Olarak Sil", on_click=toplu_silme_onayi_iste)
         yenile_btn = make_button("🔄 Yenile", height=30, bgcolor="#10b981", color="white", tooltip="Buluttaki Yeni Kayıtları Getir", on_click=verileri_buluttan_yenile)
 
+        # Kullanıcı İsteği: Yeni/Eski/Başa/Sona üstte ortalı, İşlem Geçmişi başlığı altında ortalı, Yenile ve Toplu Sil de altta ortalı
         liste_ust_bar = ft.Container(
             content=ft.Column([
-                ft.Row([
-                    ft.Row([
-                        ft.Icon(ft.Icons.RECEIPT_LONG, size=18, color="#1e293b"),
-                        ft.Text("İşlem Geçmişi", weight=ft.FontWeight.BOLD, size=14, color="#1e293b"),
-                    ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    ft.Row([
-                        yenile_btn,
-                        toplu_sil_btn
-                    ], spacing=6)
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                # 1. Sıralama ve Başa / Sona Kaydırma Butonları (Ortalanmış)
                 ft.Row([
                     siralama_btn,
-                    make_button("⬆ Başa", height=30, outlined=True, tooltip="En Başa Git", on_click=listeyi_basa_sar),
-                    make_button("⬇ Sona", height=30, outlined=True, tooltip="En Sona Git", on_click=listeyi_sona_sar),
-                ], spacing=6)
-            ], spacing=6),
+                    make_button("⬆ Başa", height=32, outlined=True, tooltip="Listenin En Başına Git", on_click=listeyi_basa_sar),
+                    make_button("⬇ Sona", height=32, outlined=True, tooltip="Listenin En Sonuna Git", on_click=listeyi_sona_sar),
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
+
+                # 2. İşlem Geçmişi Başlığı (Ortalanmış)
+                ft.Row([
+                    ft.Icon(ft.Icons.RECEIPT_LONG_ROUNDED, size=18, color="#0f172a"),
+                    ft.Text("İşlem Geçmişi", weight=ft.FontWeight.BOLD, size=15, color="#0f172a"),
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
+
+                # 3. Yenile ve Toplu Sil Butonları (Ortalanmış)
+                ft.Row([
+                    yenile_btn,
+                    toplu_sil_btn
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=10)
+            ], spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             width=355,
-            padding=make_padding(0, 2)
+            padding=make_padding(0, 4)
         )
 
 
@@ -4885,28 +5321,141 @@ def main(page: ft.Page):
             on_click=cikis_yap_aksiyon
         )
 
+        # --- TEMA SEÇİM DİYALOĞU ---
+        def tema_secim_dialogu_ac(e=None):
+            dokunma_geribildirimi()
+            secili_tema = [tema_oku()]
+
+            def tema_uygula(t_kod):
+                secili_tema[0] = t_kod
+                tema_kaydet(t_kod)
+                if t_kod == "light":
+                    page.theme_mode = ft.ThemeMode.LIGHT
+                    page.bgcolor = "#f8fafc"
+                elif t_kod == "dark":
+                    page.theme_mode = ft.ThemeMode.DARK
+                    page.bgcolor = "#0b1329"
+                else:
+                    page.theme_mode = ft.ThemeMode.SYSTEM
+                    page.bgcolor = None
+                try:
+                    page.update()
+                except Exception:
+                    pass
+                close_app_dialog(page, tema_dialog)
+                show_app_snackbar(page, f"🎨 Tema güncellendi: {t_kod.title()}", color="#10b981")
+
+            tema_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.PALETTE_ROUNDED, color="#7c3aed", size=22),
+                    ft.Text("Görünüm ve Tema", size=16, weight=ft.FontWeight.BOLD)
+                ], spacing=8),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Text("Uygulama görünüm temasını seçin:", size=11, color="#64748b"),
+                        make_button("📱 Cihaz Teması ile Aynı (Varsayılan)", height=38, outlined=True, on_click=lambda _: tema_uygula("system")),
+                        make_button("☀️ Açık Tema", height=38, outlined=True, on_click=lambda _: tema_uygula("light")),
+                        make_button("🌙 Koyu Tema", height=38, outlined=True, on_click=lambda _: tema_uygula("dark")),
+                    ], spacing=8, tight=True),
+                    width=300
+                ),
+                actions=[
+                    make_button("✕ Kapat", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, tema_dialog))
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+            show_app_dialog(page, tema_dialog)
+
+        # --- ÜÇ ÇİZGİ HAMBURGER MENÜ MERKEZİ ---
+        def menu_ac(e=None):
+            dokunma_geribildirimi()
+            
+            def menu_aksiyon_calistir(fn):
+                close_app_dialog(page, menu_dialog)
+                fn()
+
+            menu_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.MENU_ROUNDED, color="#2563eb", size=22),
+                    ft.Text("Hızlı Menü", size=16, weight=ft.FontWeight.BOLD)
+                ], spacing=8),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.ListTile(
+                            leading=ft.Icon(ft.Icons.UPLOAD_FILE_ROUNDED, color="#2563eb"),
+                            title=ft.Text("CSV'den İşlem Yükle", size=13, weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text("Excel / CSV dosyasından yükleme", size=10, color="#64748b"),
+                            on_click=lambda _: menu_aksiyon_calistir(csv_yukle_tiklandi)
+                        ),
+                        ft.ListTile(
+                            leading=ft.Icon(ft.Icons.DOWNLOAD_ROUNDED, color="#059669"),
+                            title=ft.Text("Kayıtları CSV Olarak İndir", size=13, weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text("Tüm işlemleri CSV olarak kaydet", size=10, color="#64748b"),
+                            on_click=lambda _: menu_aksiyon_calistir(csv_indir_tiklandi)
+                        ),
+                        ft.Divider(height=6, color="#e2e8f0"),
+                        ft.ListTile(
+                            leading=ft.Icon(ft.Icons.PALETTE_OUTLINED, color="#7c3aed"),
+                            title=ft.Text("Tema Seçimi (Sistem / Açık / Koyu)", size=13, weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text("Varsayılan: Cihaz teması", size=10, color="#64748b"),
+                            on_click=lambda _: menu_aksiyon_calistir(tema_secim_dialogu_ac)
+                        ),
+                        ft.ListTile(
+                            leading=ft.Icon(ft.Icons.SCHOOL_ROUNDED, color="#f59e0b"),
+                            title=ft.Text("Otomatik Okul Harçlığı", size=13, weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text("MEB takvimi uyumlu ayarlar", size=10, color="#64748b"),
+                            on_click=lambda _: menu_aksiyon_calistir(harclik_ayarlari_modal_ac)
+                        ),
+                        ft.ListTile(
+                            leading=ft.Icon(ft.Icons.PIE_CHART_ROUNDED, color="#6366f1"),
+                            title=ft.Text("Kategori Grafikleri & İstatistik", size=13, weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text("Harcama dağılımı ve analizler", size=10, color="#64748b"),
+                            on_click=lambda _: menu_aksiyon_calistir(istatistik_ac)
+                        ),
+                        ft.Divider(height=6, color="#e2e8f0"),
+                        ft.ListTile(
+                            leading=ft.Icon(ft.Icons.MANAGE_ACCOUNTS_ROUNDED, color="#dc2626"),
+                            title=ft.Text("Hesap Değiştir / Çıkış", size=13, weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text(f"Aktif: {kullanici}", size=10, color="#64748b"),
+                            on_click=lambda _: menu_aksiyon_calistir(cikis_yap_aksiyon)
+                        )
+                    ], spacing=0, scroll=ft.ScrollMode.AUTO),
+                    width=320,
+                    height=360
+                ),
+                actions=[
+                    make_button("✕ Kapat", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, menu_dialog))
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+            show_app_dialog(page, menu_dialog)
+
+        # Üst Başlık Barı (Üç Çizgi Hamburger Menü + Logo + Profil Çipi + Harçlık / Grafik Kısayolu)
+        menu_btn = make_icon_btn(ft.Icons.MENU_ROUNDED, icon_size=24, icon_color="#0f172a", tooltip="Menü (CSV, Tema, Ayarlar)", on_click=menu_ac)
+
         ust_baslik_bari = ft.Container(
             content=ft.Row([
                 ft.Row([
-                    ft.Text("🏠 Hane Bütçesi", size=18, weight=ft.FontWeight.BOLD, color="#0f172a"),
-                    profil_cipi
+                    menu_btn,
+                    ft.Text("🏠 Hane Bütçesi", size=18, weight=ft.FontWeight.BOLD, color="#0f172a")
                 ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Row([
+                    profil_cipi,
                     make_icon_btn(
                         ft.Icons.SCHOOL_ROUNDED, 
-                        icon_size=22, 
+                        icon_size=20, 
                         icon_color="#f59e0b", 
-                        tooltip="🎒 Otomatik Okul Harçlığı Ayarları", 
+                        tooltip="🎒 Otomatik Okul Harçlığı", 
                         on_click=harclik_ayarlari_modal_ac
                     ),
                     make_icon_btn(
                         ft.Icons.PIE_CHART_ROUNDED, 
-                        icon_size=22, 
+                        icon_size=20, 
                         icon_color="#6366f1", 
-                        tooltip="📊 Kategori Grafikleri & İstatistik", 
+                        tooltip="📊 Grafikler & İstatistik", 
                         on_click=istatistik_ac
                     )
-                ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER)
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             width=355,
             padding=make_padding(0, 4)
@@ -4992,13 +5541,9 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                     except Exception:
                         pass
 
-                    # Gerçek ve çalışan Google Gemini modelleri cascade sırası
-                    denenecek_modeller = [
-                        ("v1beta", "gemini-2.0-flash"),
-                        ("v1beta", "gemini-1.5-flash"),
-                        ("v1beta", "gemini-1.5-flash-latest"),
-                        ("v1", "gemini-1.5-flash")
-                    ]
+                    # Google API'den aktif ve çalışan flash modellerini dinamik çek
+                    aktif_list = gemini_aktif_modelleri_bul(api_key, ssl_ctx)
+                    denenecek_modeller = aktif_list[:3] if aktif_list else [("v1beta", "gemini-1.5-flash")]
 
                     for api_ver, model_name in denenecek_modeller:
                         try:
@@ -5012,7 +5557,7 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                                 data=json.dumps(payload).encode("utf-8"),
                                 headers={"x-goog-api-key": api_key, "Content-Type": "application/json"}
                             )
-                            kw = {"timeout": 12}
+                            kw = {"timeout": 4}
                             if ssl_ctx:
                                 kw["context"] = ssl_ctx
                             with urllib.request.urlopen(req, **kw) as resp:
@@ -5102,11 +5647,65 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
             on_submit=sozel_islem_calistir
         )
 
+        # --- SESLE VERİ GİRİŞİ DİYALOĞU ---
+        def sesli_giris_dialogu_ac(e=None):
+            dokunma_geribildirimi()
+            ses_metni_tf = ft.TextField(
+                label="Konuştuğunuz İfadeyi Buradan İnceleyin / Düzenleyin",
+                hint_text="Örn: BİM'den 3 ekmek 33 lira aldım...",
+                multiline=True,
+                min_lines=2,
+                max_lines=4,
+                value=sozel_input.value or "",
+                autofocus=True
+            )
+
+            def sesli_onayla(ev):
+                metin = ses_metni_tf.value.strip()
+                if metin:
+                    sozel_input.value = metin
+                    close_app_dialog(page, sesli_dialog)
+                    sozel_islem_calistir()
+                else:
+                    show_app_snackbar(page, "Lütfen harcamanızı söyleyin veya yazın.", color="#ef4444")
+
+            sesli_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.MIC_ROUNDED, color="#ef4444", size=24),
+                    ft.Text("🎙️ Sesle Veri Girişi", size=16, weight=ft.FontWeight.BOLD)
+                ], spacing=8),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Text("Klavyenizin mikrofon tuşuna dokunarak konuşabilir veya sesli ifadenizi buraya söyleyebilirsiniz:", size=11, color="#64748b"),
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.RECORD_VOICE_OVER_ROUNDED, color="#6366f1", size=20),
+                                ft.Text("Örn: 'BİM 3 ekmek 33 lira' veya 'Shell 500 tl benzin'", size=11, color="#4338ca", italic=True)
+                            ], spacing=6),
+                            bgcolor="#eef2ff",
+                            border_radius=8,
+                            padding=make_padding(8, 6)
+                        ),
+                        ses_metni_tf
+                    ], spacing=10, tight=True),
+                    width=330
+                ),
+                actions=[
+                    make_button("✕ İptal", height=34, outlined=True, on_click=lambda _: close_app_dialog(page, sesli_dialog)),
+                    make_button("⚡ AI ile Ekle", height=34, bgcolor="#6366f1", color="white", on_click=sesli_onayla)
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+            show_app_dialog(page, sesli_dialog)
+
+        mic_btn = make_icon_btn(ft.Icons.MIC_ROUNDED, icon_size=22, icon_color="#ef4444", tooltip="🎙️ Sesle Veri Girişi", on_click=sesli_giris_dialogu_ac)
+
         sozel_cubuk = ft.Container(
             content=ft.Row([
                 sozel_input,
+                mic_btn,
                 make_button("✨ AI Ekle", height=36, bgcolor="#6366f1", color="white", on_click=sozel_islem_calistir)
-            ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             bgcolor="white",
             border=make_border_all(1, "#e2e8f0"),
             border_radius=14,
@@ -5114,17 +5713,12 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
             width=355
         )
 
-        # Hızlı Aksiyon Butonları (Tamamen Ortalanmış, Eşit Genişlikte Kusursuz Simetrik 2x2 Izgara)
+        # Hızlı Aksiyon Butonları (CSV Menüye Taşındı; Ekranda 2 Büyük, Ferah ve Ortalı Ana Buton Kaldı)
         btn_yeni_islem = form_ac_kapat_btn
-        btn_fis_tara = make_button("📸 Fiş Tara", bgcolor="#6366f1", color="white", height=40, tooltip="Fiş Fotoğrafı Yükle & AI ile Oku", expand=True, on_click=fis_tara_tiklandi)
-        btn_csv_yukle = make_button("📥 CSV Yükle", bgcolor="white", color="#334155", height=40, outlined=True, tooltip="CSV'den İşlem Yükle", expand=True, on_click=csv_yukle_tiklandi)
-        btn_csv_indir = make_button("📤 CSV İndir", bgcolor="white", color="#334155", height=40, outlined=True, tooltip="Kayıtları CSV Olarak İndir", expand=True, on_click=csv_indir_tiklandi)
+        btn_fis_tara = make_button("📸 Fiş Tara", bgcolor="#7c3aed", color="white", height=44, tooltip="Fiş Fotoğrafı Yükle & AI ile Oku", expand=True, on_click=fis_tara_tiklandi)
 
         hizli_aksiyon_bari = ft.Container(
-            content=ft.Column([
-                ft.Row([btn_yeni_islem, btn_fis_tara], spacing=8, alignment=ft.MainAxisAlignment.CENTER),
-                ft.Row([btn_csv_yukle, btn_csv_indir], spacing=8, alignment=ft.MainAxisAlignment.CENTER)
-            ], spacing=8, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            content=ft.Row([btn_yeni_islem, btn_fis_tara], spacing=10, alignment=ft.MainAxisAlignment.CENTER),
             width=355
         )
 
