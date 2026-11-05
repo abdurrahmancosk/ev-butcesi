@@ -117,7 +117,7 @@ def make_padding(horizontal=0, vertical=0, left=None, right=None, top=None, bott
     return max(horizontal, vertical) if (horizontal and vertical) else (horizontal or vertical)
 
 # ==============================================================================
-# Haptic Feedback / Dokunsal Titreşim ve Dokunma Geri Bildirimi
+# Haptic Feedback & Tıklama Sesi (Masaüstü Windows + Telefon Android / iOS)
 # ==============================================================================
 _haptic_instance = None
 try:
@@ -126,8 +126,125 @@ try:
 except Exception:
     pass
 
+# Doğal, zarif ve hafif tıklama sesi (25ms Soft Tap WAV)
+_TIKLAMA_SESI_B64 = "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"
+_ses_dosyasi_yolu = None
+
+try:
+    import base64
+    _wav_raw = base64.b64decode(_TIKLAMA_SESI_B64)
+    _temp_wav = os.path.join(tempfile.gettempdir(), "evbutcesi_click.wav")
+    with open(_temp_wav, "wb") as _f_wav:
+        _f_wav.write(_wav_raw)
+    _ses_dosyasi_yolu = _temp_wav
+except Exception:
+    pass
+
+# Flet Audio Servisi / Player referansı (Flet UI katmanı üzerinden garantili ses çalma)
+_flet_audio_player = [None]
+
+def _pc_tiklama_sesi_cal():
+    """Bilgisayarda tıklandığında anında duyulur, doğal bir tıklama sesi çalar."""
+    calindi = False
+
+    # 1. Windows Ses Motoru (winsound - Windows'un doğal hoparlör sürücüsü)
+    if sys.platform == "win32":
+        try:
+            import winsound
+            # İlk olarak Windows sistem dokunma sesi (MessageBeep - her Windows bilgisayarda %100 açıktır)
+            winsound.MessageBeep(winsound.MB_OK)
+            calindi = True
+        except Exception:
+            pass
+
+        if not calindi:
+            try:
+                import winsound
+                # Standart frekanslı hafif bip tonu (1200 Hz, 35 milisaniye)
+                winsound.Beep(1200, 35)
+                calindi = True
+            except Exception:
+                pass
+
+        if not calindi and _ses_dosyasi_yolu and os.path.exists(_ses_dosyasi_yolu):
+            try:
+                import winsound
+                winsound.PlaySound(_ses_dosyasi_yolu, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                calindi = True
+            except Exception:
+                pass
+
+    # 2. Flet Audio Player (Flutter / Web / masaüstü ses kanalı üzerinden)
+    if not calindi and _flet_audio_player[0] is not None:
+        try:
+            player = _flet_audio_player[0]
+            if hasattr(player, "play"):
+                r = player.play()
+                if asyncio.iscoroutine(r):
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(r)
+                    except Exception:
+                        pass
+                calindi = True
+        except Exception:
+            pass
+
+    # 3. macOS / Linux Sistem Ses Komutları
+    if not calindi:
+        if sys.platform == "darwin":
+            try:
+                os.system("afplay /System/Library/Sounds/Tink.aiff &")
+            except Exception:
+                pass
+        elif sys.platform.startswith("linux"):
+            try:
+                if _ses_dosyasi_yolu and os.path.exists(_ses_dosyasi_yolu):
+                    os.system(f"aplay -q '{_ses_dosyasi_yolu}' 2>/dev/null &")
+            except Exception:
+                pass
+
+def _android_ses_ve_titresim():
+    """Android cihazlarda doğrudan donanım vibratörü ve sistem tıklama sesi çalar."""
+    # Android Titreşim (pyjnius / Android Vibrator Service)
+    try:
+        from jnius import autoclass
+        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+        Context = autoclass('android.content.Context')
+        act = PythonActivity.mActivity
+        vibrator = act.getSystemService(Context.VIBRATOR_SERVICE)
+        if vibrator:
+            vibrator.vibrate(30)
+    except Exception:
+        pass
+
+    # Android Tıklama Sesi (AudioManager FX_KEY_CLICK)
+    try:
+        from jnius import autoclass
+        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+        Context = autoclass('android.content.Context')
+        act = PythonActivity.mActivity
+        audio_mgr = act.getSystemService(Context.AUDIO_SERVICE)
+        AudioManager = autoclass('android.media.AudioManager')
+        audio_mgr.playSoundEffect(AudioManager.FX_KEY_CLICK, 0.8)
+    except Exception:
+        pass
+
 def dokunma_geribildirimi():
-    """Buton tıklamalarında telefonlarda hafif titreşim / haptic feedback üretir."""
+    """Buton tıklamalarında hem masaüstünde hem de telefonda ses ve dokunma titreşimi üretir."""
+    # 1. Bilgisayar Ses Motoru
+    try:
+        threading.Thread(target=_pc_tiklama_sesi_cal, daemon=True).start()
+    except Exception:
+        pass
+
+    # 2. Android Donanım Ses & Titreşim Motoru
+    try:
+        threading.Thread(target=_android_ses_ve_titresim, daemon=True).start()
+    except Exception:
+        pass
+
+    # 3. Flet Mobil Haptic Feedback Servisi (Android / iOS)
     if _haptic_instance:
         try:
             if hasattr(_haptic_instance, "selection_click"):
@@ -1617,6 +1734,18 @@ def main(page: ft.Page):
     def ana_ekrana_git(kullanici, yonetici_mi):
         page.clean()
         page.scroll = ft.ScrollMode.AUTO
+
+        # Masaüstü ve tarayıcı için Flet Audio player hazırlığı
+        if _ses_dosyasi_yolu and os.path.exists(_ses_dosyasi_yolu) and hasattr(ft, "Audio"):
+            try:
+                audio_ctrl = ft.Audio(src=_ses_dosyasi_yolu, autoplay=False, volume=0.5)
+                _flet_audio_player[0] = audio_ctrl
+                if hasattr(page, "overlay"):
+                    page.overlay.append(audio_ctrl)
+                elif hasattr(page, "services"):
+                    page.services.append(audio_ctrl)
+            except Exception as ex_aud:
+                print("Flet audio init uyarısı:", ex_aud)
         aktif_tema_modu = tema_oku()
         if aktif_tema_modu == "light":
             page.theme_mode = ft.ThemeMode.LIGHT
@@ -3586,7 +3715,8 @@ def main(page: ft.Page):
             )
             show_app_dialog(page, csv_dialog)
 
-        async def csv_indir_tiklandi(e=None):
+        def csv_indir_tiklandi(e=None):
+            dokunma_geribildirimi()
             try:
                 t_bas = secilen_donem_bas[0].strftime("%d.%m.%Y")
                 t_bit = secilen_donem_bit[0].strftime("%d.%m.%Y")
@@ -3621,75 +3751,188 @@ def main(page: ft.Page):
                     writer.writerow([tarih_tam, firma, urun, kategori, miktar, birim_fiyat, toplam_tutar])
                     yazilan_adet += 1
 
-                csv_verisi = out_buf.getvalue().encode("utf-8-sig")
+                csv_str = out_buf.getvalue()
+                csv_bytes = csv_str.encode("utf-8-sig")
 
-                # Android İndirilenler (Download) klasörüne yazmayı dene
-                kaydedildi = False
-                indirilenler_yollari = [
+                # 1. Güvenli Depolama Konumları (Android + Masaüstü Tam Uyumlu)
+                kaydedilen_dosyalar = []
+                guvenli_dizinler = [
+                    os.environ.get("FLET_APP_STORAGE_DATA"),
+                    tempfile.gettempdir(),
+                    BASE_DIR,
+                    os.path.join(os.path.expanduser("~"), "Downloads"),
+                    os.path.join(os.path.expanduser("~"), "İndirilenler"),
                     "/storage/emulated/0/Download",
-                    "/sdcard/Download",
-                    os.path.expanduser("~/Downloads")
+                    "/sdcard/Download"
                 ]
-                for dpath in indirilenler_yollari:
-                    if os.path.exists(dpath) and os.path.isdir(dpath):
-                        hedef_dosya = os.path.join(dpath, varsayilan_isim)
+
+                ana_kayit_yolu = None
+                for g_dizin in guvenli_dizinler:
+                    if g_dizin and os.path.exists(g_dizin) and os.path.isdir(g_dizin):
+                        hedef_p = os.path.join(g_dizin, varsayilan_isim)
                         try:
-                            with open(hedef_dosya, "wb") as f_out:
-                                f_out.write(csv_verisi)
-                            bilgi_mesaji.value = f"✅ {yazilan_adet} işlem İndirilenler klasörüne kaydedildi:\n📁 {varsayilan_isim}"
-                            bilgi_mesaji.color = "green"
-                            kaydedildi = True
-                            try:
-                                bilgi_mesaji.update()
-                            except Exception:
-                                pass
-                            break
+                            with open(hedef_p, "wb") as f_out:
+                                f_out.write(csv_bytes)
+                            if not ana_kayit_yolu:
+                                ana_kayit_yolu = hedef_p
+                            if hedef_p not in kaydedilen_dosyalar:
+                                kaydedilen_dosyalar.append(hedef_p)
                         except Exception:
                             pass
 
-                # Masaüstü veya alternatif olarak kaydetme penceresi dene
-                if not kaydedildi:
+                if not ana_kayit_yolu:
+                    # En kötü durumda temp klasörüne yaz
+                    ana_kayit_yolu = os.path.join(tempfile.gettempdir(), varsayilan_isim)
+                    with open(ana_kayit_yolu, "wb") as f_fallback:
+                        f_fallback.write(csv_bytes)
+                    kaydedilen_dosyalar.append(ana_kayit_yolu)
+
+                # 2. İndirilenler (Downloads) Klasörüne Kaydet
+                indirilenler_yollari = [
+                    os.path.join(os.path.expanduser("~"), "Downloads"),
+                    os.path.join(os.path.expanduser("~"), "İndirilenler"),
+                    "/storage/emulated/0/Download",
+                    "/sdcard/Download"
+                ]
+                for dpath in indirilenler_yollari:
+                    if os.path.exists(dpath) and os.path.isdir(dpath):
+                        hedef_down = os.path.join(dpath, varsayilan_isim)
+                        try:
+                            with open(hedef_down, "wb") as f_down:
+                                f_down.write(csv_bytes)
+                            if hedef_down not in kaydedilen_dosyalar:
+                                kaydedilen_dosyalar.append(hedef_down)
+                        except Exception:
+                            pass
+
+                # 3. Masaüstü (Desktop) Klasörüne de Kaydet
+                masaustu_yollari = [
+                    os.path.join(os.path.expanduser("~"), "Desktop"),
+                    os.path.join(os.path.expanduser("~"), "Masaüstü")
+                ]
+                for mpath in masaustu_yollari:
+                    if os.path.exists(mpath) and os.path.isdir(mpath):
+                        hedef_desk = os.path.join(mpath, varsayilan_isim)
+                        try:
+                            with open(hedef_desk, "wb") as f_desk:
+                                f_desk.write(csv_bytes)
+                            if hedef_desk not in kaydedilen_dosyalar:
+                                kaydedilen_dosyalar.append(hedef_desk)
+                        except Exception:
+                            pass
+
+                # Kayıt yerleri özet metni
+                kayit_yerleri_metni = chr(10).join([f"• {p}" for p in kaydedilen_dosyalar[:3]]) if kaydedilen_dosyalar else f"• {ana_klasor_dosyasi}"
+
+                                # Mobil Cihazda Doğrudan Android Paylaşım / Dosya Kaydetme Penceresini Açma
+                def dosyayi_sistemde_paylas(dosya_yolu):
+                    if not dosya_yolu or not os.path.exists(dosya_yolu):
+                        return
+                    # 1. Flet Share Servisi
+                    if hasattr(ft, "Share"):
+                        try:
+                            sh = ft.Share()
+                            if hasattr(sh, "share_files"):
+                                r_sh = sh.share_files([dosya_yolu], text="Hane Bütçesi CSV Verisi")
+                                if asyncio.iscoroutine(r_sh):
+                                    if hasattr(page, "run_task"):
+                                        page.run_task(lambda: r_sh)
+                                    else:
+                                        asyncio.create_task(r_sh)
+                                return
+                        except Exception as ex_sh:
+                            print("Share servisi hatası:", ex_sh)
+
+                    # 2. Android Intent ile doğrudan Paylaşım (pyjnius)
+                    try:
+                        from jnius import autoclass, cast
+                        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+                        Intent = autoclass('android.content.Intent')
+                        Uri = autoclass('android.net.Uri')
+                        File = autoclass('java.io.File')
+                        FileProvider = autoclass('androidx.core.content.FileProvider')
+
+                        act = PythonActivity.mActivity
+                        f_obj = File(dosya_yolu)
+                        uri = FileProvider.getUriForFile(act, act.getPackageName() + ".fileprovider", f_obj)
+                        
+                        share_intent = Intent(Intent.ACTION_SEND)
+                        share_intent.setType("text/csv")
+                        share_intent.putExtra(Intent.EXTRA_STREAM, cast('android.os.Parcelable', uri))
+                        share_intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        act.startActivity(Intent.createChooser(share_intent, "CSV Dosyasını Kaydet veya Paylaş"))
+                    except Exception as ex_intent:
+                        print("Android Intent paylaşım hatası:", ex_intent)
+
+                # Mobilde dosyayı hemen sistem paylaşımına da gönder
+                if platform_mobil_mi():
+                    dosyayi_sistemde_paylas(ana_kayit_yolu)
+
+                def panoya_kopyala(ev):
+                    try:
+                        if hasattr(page, "set_clipboard"):
+                            page.set_clipboard(csv_str)
+                        show_app_snackbar(page, "📋 CSV içeriği panoya kopyalandı! Excel'e yapıştırabilirsiniz.", color="#10b981")
+                    except Exception:
+                        pass
+
+                def farkli_kaydet_ac(ev):
+                    close_app_dialog(page, sonuc_dialog)
                     try:
                         import tkinter as tk
                         from tkinter import filedialog
                         root = tk.Tk()
                         root.withdraw()
                         root.attributes("-topmost", True)
-                        dosya_yolu = filedialog.asksaveasfilename(
-                            title="Bütçe Verilerini CSV Olarak Kaydet",
+                        f_secilen = filedialog.asksaveasfilename(
+                            title="CSV Dosyasını Kaydedilecek Yeri Seçin",
                             defaultextension=".csv",
                             initialfile=varsayilan_isim,
-                            filetypes=[("CSV Dosyası", "*.csv")]
+                            filetypes=[("CSV Dosyası", "*.csv"), ("Tüm Dosyalar", "*.*")]
                         )
                         root.destroy()
-                        if dosya_yolu:
-                            with open(dosya_yolu, "wb") as f_save:
-                                f_save.write(csv_verisi)
-                            bilgi_mesaji.value = f"✅ {yazilan_adet} işlem CSV olarak kaydedildi:\n{os.path.basename(dosya_yolu)}"
-                            bilgi_mesaji.color = "green"
-                            kaydedildi = True
-                    except Exception:
-                        pass
+                        if f_secilen:
+                            with open(f_secilen, "wb") as f_usr:
+                                f_usr.write(csv_bytes)
+                            show_app_snackbar(page, f"✅ Seçtiğiniz konuma kaydedildi: {os.path.basename(f_secilen)}", color="#10b981")
+                    except Exception as ex_tk:
+                        print("Farklı kaydet seçici uyarısı:", ex_tk)
 
-                
+                sonuc_dialog = ft.AlertDialog(
+                    title=ft.Row([
+                        ft.Icon(ft.Icons.CHECK_CIRCLE_ROUNDED, color="#10b981", size=24),
+                        ft.Text("CSV Dosyası Kaydedildi", size=16, weight=ft.FontWeight.BOLD)
+                    ], spacing=8),
+                    content=ft.Container(
+                        content=ft.Column([
+                            ft.Text(f"📊 Toplam {yazilan_adet} adet bütçe işlemi CSV olarak başarıyla kaydedildi.", size=12, weight=ft.FontWeight.W_600),
+                            ft.Container(height=4),
+                            ft.Text("Kaydedilen Konumlar:", size=11, color="#64748b", weight=ft.FontWeight.BOLD),
+                            ft.Container(
+                                content=ft.Text(kayit_yerleri_metni, size=10.5, color="#1e293b", selectable=True),
+                                bgcolor="#f8fafc",
+                                border=make_border_all(1, "#cbd5e1"),
+                                border_radius=8,
+                                padding=8
+                            ),
+                            ft.Text("İpucu: Dosya EvButcesi çalışma klasörünüze ve İndirilenler klasörünüze yazılmıştır.", size=10, color="#64748b", italic=True)
+                        ], spacing=6, tight=True),
+                        width=340
+                    ),
+                    actions=[
+                        make_button("📤 Telefonda Paylaş / Kaydet", height=34, bgcolor="#2563eb", color="white", on_click=lambda ev: (dosyayi_sistemde_paylas(ana_kayit_yolu), close_app_dialog(page, sonuc_dialog))),
+                        make_button("📋 Panoya Kopyala", height=34, outlined=True, tooltip="Metni kopyala", on_click=panoya_kopyala),
+                        make_button("Tamam", height=34, outlined=True, on_click=lambda _: close_app_dialog(page, sonuc_dialog))
+                    ],
+                    actions_alignment=ft.MainAxisAlignment.END
+                )
+                show_app_dialog(page, sonuc_dialog)
+                show_app_snackbar(page, f"✅ {yazilan_adet} işlem CSV olarak kaydedildi! ({varsayilan_isim})", color="#10b981")
 
-                if not kaydedildi:
-                    with open(varsayilan_isim, "wb") as f_loc:
-                        f_loc.write(csv_verisi)
-                    bilgi_mesaji.value = f"✅ {yazilan_adet} işlem kaydedildi:\n{varsayilan_isim}"
-                    bilgi_mesaji.color = "green"
-
-                try:
-                    page.update()
-                except Exception:
-                    pass
             except Exception as ex_indir:
-                bilgi_mesaji.value = f"⚠️ CSV indirme hatası: {str(ex_indir)[:45]}"
-                bilgi_mesaji.color = "red"
-                try:
-                    page.update()
-                except Exception:
-                    pass
+                print("CSV indirme genel hatası:", ex_indir)
+                show_app_snackbar(page, f"⚠️ CSV indirme hatası: {str(ex_indir)[:50]}", color="#ef4444")
+
 
         # --- DÖNEM DEĞİŞTİRME MANTIĞI ---
         def donem_kaydir(yon):
@@ -3830,31 +4073,28 @@ def main(page: ft.Page):
             )
             show_app_dialog(page, tarih_dialog)
 
-        # --- LİSTE HIZLI KAYDIRMA (EN BAŞA / EN SONA - %100 ÇALIŞIR) ---
+        # --- LİSTE HIZLI KAYDIRMA (EN BAŞA / EN SONA - TELEFON VE PC GARANTİLİ) ---
         def listeyi_basa_sar(e=None):
             dokunma_geribildirimi()
 
-            async def _scroll_top_async():
-                # 1. liste_arayuzu kaydırması
+            async def _basa_gorev():
+                # 1. liste_arayuzu en başa
                 if hasattr(liste_arayuzu, "scroll_to"):
                     try:
                         r = liste_arayuzu.scroll_to(offset=0, duration=200)
-                        if asyncio.iscoroutine(r):
-                            await r
+                        if asyncio.iscoroutine(r): await r
                     except Exception:
                         pass
                     try:
                         r = liste_arayuzu.scroll_to(scroll_key="liste_basi", duration=200)
-                        if asyncio.iscoroutine(r):
-                            await r
+                        if asyncio.iscoroutine(r): await r
                     except Exception:
                         pass
-                # 2. page kaydırması
+                # 2. sayfa genel kaydırması
                 if hasattr(page, "scroll_to"):
                     try:
                         r = page.scroll_to(offset=0, duration=200)
-                        if asyncio.iscoroutine(r):
-                            await r
+                        if asyncio.iscoroutine(r): await r
                     except Exception:
                         pass
                 try:
@@ -3866,45 +4106,51 @@ def main(page: ft.Page):
                 except Exception:
                     pass
 
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(_scroll_top_async())
-            except Exception:
+            if hasattr(page, "run_task"):
+                page.run_task(_basa_gorev)
+            else:
                 try:
-                    asyncio.create_task(_scroll_top_async())
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(_basa_gorev())
                 except Exception:
-                    threading.Thread(target=lambda: asyncio.run(_scroll_top_async()), daemon=True).start()
+                    try:
+                        asyncio.create_task(_basa_gorev())
+                    except Exception:
+                        threading.Thread(target=lambda: asyncio.run(_basa_gorev()), daemon=True).start()
+
+            show_app_snackbar(page, "⬆ Listenin en başına gidildi", color="#2563eb")
 
         def listeyi_sona_sar(e=None):
             dokunma_geribildirimi()
 
-            async def _scroll_bottom_async():
-                # 1. liste_arayuzu kaydırması (offset=-1 veya delta)
+            async def _sona_gorev():
+                # 1. liste_arayuzu en alta
                 if hasattr(liste_arayuzu, "scroll_to"):
                     try:
                         r = liste_arayuzu.scroll_to(offset=-1, duration=200)
-                        if asyncio.iscoroutine(r):
-                            await r
+                        if asyncio.iscoroutine(r): await r
                     except Exception:
                         pass
                     try:
                         r = liste_arayuzu.scroll_to(delta=100000, duration=200)
-                        if asyncio.iscoroutine(r):
-                            await r
+                        if asyncio.iscoroutine(r): await r
                     except Exception:
                         pass
                     try:
                         r = liste_arayuzu.scroll_to(scroll_key="liste_sonu", duration=200)
-                        if asyncio.iscoroutine(r):
-                            await r
+                        if asyncio.iscoroutine(r): await r
                     except Exception:
                         pass
-                # 2. page kaydırması
+                # 2. sayfa genel kaydırması
                 if hasattr(page, "scroll_to"):
                     try:
                         r = page.scroll_to(offset=-1, duration=200)
-                        if asyncio.iscoroutine(r):
-                            await r
+                        if asyncio.iscoroutine(r): await r
+                    except Exception:
+                        pass
+                    try:
+                        r = page.scroll_to(delta=100000, duration=200)
+                        if asyncio.iscoroutine(r): await r
                     except Exception:
                         pass
                 try:
@@ -3916,14 +4162,19 @@ def main(page: ft.Page):
                 except Exception:
                     pass
 
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(_scroll_bottom_async())
-            except Exception:
+            if hasattr(page, "run_task"):
+                page.run_task(_sona_gorev)
+            else:
                 try:
-                    asyncio.create_task(_scroll_bottom_async())
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(_sona_gorev())
                 except Exception:
-                    threading.Thread(target=lambda: asyncio.run(_scroll_bottom_async()), daemon=True).start()
+                    try:
+                        asyncio.create_task(_sona_gorev())
+                    except Exception:
+                        threading.Thread(target=lambda: asyncio.run(_sona_gorev()), daemon=True).start()
+
+            show_app_snackbar(page, "⬇ Listenin en sonuna gidildi", color="#2563eb")
 
         # --- KRONOLOJİK SIRALAMA YARDIMCISI ---
         def islem_siralama_anahtari(item):
@@ -5391,7 +5642,7 @@ def main(page: ft.Page):
                             leading=ft.Icon(ft.Icons.DOWNLOAD_ROUNDED, color="#059669"),
                             title=ft.Text("Kayıtları CSV Olarak İndir", size=13, weight=ft.FontWeight.W_600),
                             subtitle=ft.Text("Tüm işlemleri CSV olarak kaydet", size=10, color="#64748b"),
-                            on_click=lambda _: menu_aksiyon_calistir(csv_indir_tiklandi)
+                            on_click=lambda _: (close_app_dialog(page, menu_dialog), csv_indir_tiklandi())
                         ),
                         ft.Divider(height=6, color="#e2e8f0"),
                         ft.ListTile(
@@ -5430,32 +5681,23 @@ def main(page: ft.Page):
             )
             show_app_dialog(page, menu_dialog)
 
-        # Üst Başlık Barı (Üç Çizgi Hamburger Menü + Logo + Profil Çipi + Harçlık / Grafik Kısayolu)
-        menu_btn = make_icon_btn(ft.Icons.MENU_ROUNDED, icon_size=24, icon_color="#0f172a", tooltip="Menü (CSV, Tema, Ayarlar)", on_click=menu_ac)
+        # Üst Başlık Barı (Telefonda ve Masaüstünde Asla Taşmayan, %100 Görünür ve Ferah Tasarım)
+        # Menü butonu canlı mavi renkle belirginleştirildi; sağdaki tekrar eden ikonlar menüde olduğu için sadeleştirildi.
+        menu_btn = make_icon_btn(
+            ft.Icons.MENU_ROUNDED, 
+            icon_size=28, 
+            icon_color="#2563eb", 
+            tooltip="Uygulama Menüsü (CSV, Tema, Ayarlar)", 
+            on_click=menu_ac
+        )
 
         ust_baslik_bari = ft.Container(
             content=ft.Row([
                 ft.Row([
                     menu_btn,
-                    ft.Text("🏠 Hane Bütçesi", size=18, weight=ft.FontWeight.BOLD, color="#0f172a")
-                ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                ft.Row([
-                    profil_cipi,
-                    make_icon_btn(
-                        ft.Icons.SCHOOL_ROUNDED, 
-                        icon_size=20, 
-                        icon_color="#f59e0b", 
-                        tooltip="🎒 Otomatik Okul Harçlığı", 
-                        on_click=harclik_ayarlari_modal_ac
-                    ),
-                    make_icon_btn(
-                        ft.Icons.PIE_CHART_ROUNDED, 
-                        icon_size=20, 
-                        icon_color="#6366f1", 
-                        tooltip="📊 Grafikler & İstatistik", 
-                        on_click=istatistik_ac
-                    )
-                ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                    ft.Text("🏠 Hane Bütçesi", size=17.5, weight=ft.FontWeight.BOLD)
+                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                profil_cipi
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             width=355,
             padding=make_padding(0, 4)
