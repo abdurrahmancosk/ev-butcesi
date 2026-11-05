@@ -114,8 +114,46 @@ def make_padding(horizontal=0, vertical=0, left=None, right=None, top=None, bott
             pass
     return max(horizontal, vertical) if (horizontal and vertical) else (horizontal or vertical)
 
-def make_button(text, icon=None, bgcolor=None, color=None, width=None, height=None, on_click=None, outlined=False, tooltip=None, **kwargs):
-    """Hem Flet 1.0 hem de eski sürümlerle %100 hatasız çalışan buton üretir."""
+# ==============================================================================
+# Haptic Feedback / Dokunsal Titreşim ve Dokunma Geri Bildirimi
+# ==============================================================================
+_haptic_instance = None
+try:
+    if hasattr(ft, "HapticFeedback"):
+        _haptic_instance = ft.HapticFeedback()
+except Exception:
+    pass
+
+def dokunma_geribildirimi():
+    """Buton tıklamalarında telefonlarda hafif titreşim / haptic feedback üretir."""
+    if _haptic_instance:
+        try:
+            if hasattr(_haptic_instance, "selection_click"):
+                res = _haptic_instance.selection_click()
+                if asyncio.iscoroutine(res):
+                    try:
+                        asyncio.create_task(res)
+                    except Exception:
+                        pass
+            elif hasattr(_haptic_instance, "light_impact"):
+                res = _haptic_instance.light_impact()
+                if asyncio.iscoroutine(res):
+                    try:
+                        asyncio.create_task(res)
+                    except Exception:
+                        pass
+            elif hasattr(_haptic_instance, "vibrate"):
+                res = _haptic_instance.vibrate()
+                if asyncio.iscoroutine(res):
+                    try:
+                        asyncio.create_task(res)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+def make_button(text, icon=None, bgcolor=None, color=None, width=None, height=None, on_click=None, outlined=False, tooltip=None, border_radius=12, **kwargs):
+    """Hem Flet 1.0 hem eski sürümlerle %100 uyumlu, haptic titreşim destekli modern buton üretir."""
     if outlined:
         btn_cls = getattr(ft, "OutlinedButton", getattr(ft, "Button", None))
     else:
@@ -123,13 +161,33 @@ def make_button(text, icon=None, bgcolor=None, color=None, width=None, height=No
     if btn_cls is None:
         btn_cls = getattr(ft, "Button", getattr(ft, "OutlinedButton", getattr(ft, "ElevatedButton", None)))
 
+    # On_click sarmalayıcısı ile dokunma geri bildirimi (haptic) ekle
+    wrapped_on_click = None
+    if on_click is not None:
+        def _tiklama_tetikle(e):
+            dokunma_geribildirimi()
+            try:
+                on_click(e)
+            except TypeError:
+                on_click()
+            except Exception as ex_btn:
+                print("Buton tıklama hatası:", ex_btn)
+        wrapped_on_click = _tiklama_tetikle
+
+    style_obj = None
+    if hasattr(ft, "ButtonStyle"):
+        try:
+            style_obj = ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=border_radius)) if hasattr(ft, "RoundedRectangleBorder") else None
+        except Exception:
+            pass
+
     denemeler = [
-        {"content": text, "icon": icon, "bgcolor": bgcolor, "color": color, "width": width, "height": height, "on_click": on_click, "tooltip": tooltip},
-        {"text": text, "icon": icon, "bgcolor": bgcolor, "color": color, "width": width, "height": height, "on_click": on_click, "tooltip": tooltip},
-        {"content": text, "icon": icon, "bgcolor": bgcolor, "color": color, "width": width, "height": height, "on_click": on_click},
-        {"text": text, "icon": icon, "bgcolor": bgcolor, "color": color, "width": width, "height": height, "on_click": on_click},
-        {"content": text, "width": width, "height": height, "on_click": on_click},
-        {"text": text, "width": width, "height": height, "on_click": on_click},
+        {"content": text, "icon": icon, "bgcolor": bgcolor, "color": color, "width": width, "height": height, "on_click": wrapped_on_click, "tooltip": tooltip, "style": style_obj},
+        {"text": text, "icon": icon, "bgcolor": bgcolor, "color": color, "width": width, "height": height, "on_click": wrapped_on_click, "tooltip": tooltip},
+        {"content": text, "icon": icon, "bgcolor": bgcolor, "color": color, "width": width, "height": height, "on_click": wrapped_on_click},
+        {"text": text, "icon": icon, "bgcolor": bgcolor, "color": color, "width": width, "height": height, "on_click": wrapped_on_click},
+        {"content": text, "width": width, "height": height, "on_click": wrapped_on_click},
+        {"text": text, "width": width, "height": height, "on_click": wrapped_on_click},
         {"content": text},
         {"text": text},
     ]
@@ -138,15 +196,34 @@ def make_button(text, icon=None, bgcolor=None, color=None, width=None, height=No
         clean_p = {k: v for k, v in p.items() if v is not None}
         try:
             return btn_cls(**clean_p)
-        except TypeError:
-            continue
         except Exception:
             continue
-
     try:
-        return btn_cls(text)
+        return ft.ElevatedButton(text=str(text), on_click=wrapped_on_click)
     except Exception:
-        return ft.Container(content=ft.Text(str(text)), on_click=on_click)
+        return ft.Container(content=ft.Text(str(text)), bgcolor=bgcolor, padding=8, on_click=wrapped_on_click)
+
+def make_icon_btn(icon, on_click=None, icon_color=None, icon_size=20, tooltip=None, **kwargs):
+    """Haptic dokunma titreşimli ve evrensel uyumlu simge buton üretir."""
+    wrapped = None
+    if on_click is not None:
+        def _icon_tiklandi(e):
+            dokunma_geribildirimi()
+            try:
+                on_click(e)
+            except TypeError:
+                on_click()
+            except Exception as ex_i:
+                print("Simge tıklama hatası:", ex_i)
+        wrapped = _icon_tiklandi
+    return ft.IconButton(
+        icon=icon,
+        icon_color=icon_color,
+        icon_size=icon_size,
+        tooltip=tooltip,
+        on_click=wrapped,
+        **kwargs
+    )
 
 def make_option(key_or_text):
     """Hem Flet 1.0 (ft.DropdownOption) hem eski (ft.dropdown.Option) ile uyumlu seçenek üretir."""
@@ -377,28 +454,135 @@ def son_gorselleri_bul(limit=4):
     return sonuc
 
 def okul_gunu_mu(tarih, tatil_kontrol=True):
-    """Okulların açık olduğu haftaiçi günleri tespit eder (MEB Takvimi uyumlu)."""
-    # Haftasonu kontrolü (Cumartesi=5, Pazar=6)
+    """
+    Tarihin MEB (Millî Eğitim Bakanlığı) Resmî Çalışma Takvimine göre 
+    okulların açık olduğu bir ders günü olup olmadığını tespit eder.
+    Hafta sonları, resmî tatiller, dinî bayramlar, ara tatiller ve yarıyıl/yaz tatillerinde False döner.
+    """
+    if isinstance(tarih, str):
+        tarih = stringden_tarih_al(tarih)
+    if not tarih:
+        return False
+        
+    # Hafta sonu kontrolü (Cumartesi=5, Pazar=6)
     if tarih.weekday() >= 5:
         return False
+        
     if not tatil_kontrol:
         return True
-    m, d = tarih.month, tarih.day
-    # Yaz tatili (20 Haziran - 6 Eylül arası okullar kapalı)
-    if (m == 6 and d > 20) or (m in [7, 8]) or (m == 9 and d < 7):
+
+    yil = tarih.year
+    ay = tarih.month
+    gun = tarih.day
+    d_obj = datetime.date(yil, ay, gun) if not isinstance(tarih, datetime.date) else tarih
+
+    # Sabit Resmî Tatiller (Ulusal bayram ve genel tatiller)
+    sabit_resmi_tatiller = [
+        (1, 1),    # 1 Ocak Yılbaşı
+        (4, 23),   # 23 Nisan Ulusal Egemenlik ve Çocuk Bayramı
+        (5, 1),    # 1 Mayıs Emek ve Dayanışma Günü
+        (5, 19),   # 19 Mayıs Atatürk'ü Anma, Gençlik ve Spor Bayramı
+        (7, 15),   # 15 Temmuz Demokrasi ve Millî Birlik Günü
+        (8, 30),   # 30 Ağustos Zafer Bayramı
+        (10, 29),  # 29 Ekim Cumhuriyet Bayramı
+    ]
+    if (ay, gun) in sabit_resmi_tatiller:
         return False
-    # 1. Dönem Ara Tatil (9-13 Kasım)
-    if m == 11 and (9 <= d <= 13):
+
+    # -------------------------------------------------------------
+    # 2026 - 2027 Eğitim ve Öğretim Yılı (MEB Resmî Çalışma Takvimi)
+    # -------------------------------------------------------------
+    # - Öğretmen Mesleki Çalışma: 1 Eylül 2026 Salı
+    # - Uyum Haftası (Okul Öncesi & İlkokul 1): 7 - 11 Eylül 2026
+    # - Tüm Kademelerde Ders Başlangıcı: 14 Eylül 2026 Pazartesi
+    # - 1. Dönem Ara Tatili: 16 - 20 Kasım 2026 (Haftasonları ile 14-22 Kasım)
+    # - 1. Dönem Sonu (Karne): 22 Ocak 2027 Cuma
+    # - Yarıyıl Tatili (Sömestr): 25 Ocak - 5 Şubat 2027 (Haftasonları ile 23 Ocak - 7 Şubat)
+    # - 2. Dönem Başlangıcı: 8 Şubat 2027 Pazartesi
+    # - 2. Dönem Ara Tatili & Ramazan Bayramı: 8 - 12 Mart 2027 (Haftasonları ile 6-14 Mart)
+    # - Kurban Bayramı: 17 - 20 Mayıs 2027 (19 Mayıs ile birleşik)
+    # - Ders Yılı Sonu (Kapanış & Karneler): 25 Haziran 2027 Cuma
+    # -------------------------------------------------------------
+    if (yil == 2026 and ay >= 7) or (yil == 2027 and ay <= 8):
+        # 2026 Yaz Tatili (7 Eylül 2026 Uyum / Başlangıç öncesi okul kapalı)
+        if d_obj < datetime.date(2026, 9, 7):
+            return False
+        # 1. Dönem Ara Tatili: 16 - 20 Kasım 2026
+        if datetime.date(2026, 11, 16) <= d_obj <= datetime.date(2026, 11, 20):
+            return False
+        # Yarıyıl Tatili (Sömestr): 25 Ocak - 5 Şubat 2027
+        if datetime.date(2027, 1, 25) <= d_obj <= datetime.date(2027, 2, 5):
+            return False
+        # 2. Dönem Ara Tatili & Ramazan Bayramı: 8 - 12 Mart 2027
+        if datetime.date(2027, 3, 8) <= d_obj <= datetime.date(2027, 3, 12):
+            return False
+        # Kurban Bayramı Tatili: 17 - 20 Mayıs 2027
+        if datetime.date(2027, 5, 17) <= d_obj <= datetime.date(2027, 5, 20):
+            return False
+        # 2027 Yaz Tatili (25 Haziran 2027 sonrası ders yılı kapanışı)
+        if d_obj > datetime.date(2027, 6, 25):
+            return False
+        return True
+
+    # -------------------------------------------------------------
+    # 2025 - 2026 Eğitim ve Öğretim Yılı (MEB Resmî Çalışma Takvimi)
+    # -------------------------------------------------------------
+    if (yil == 2025 and ay >= 7) or (yil == 2026 and ay <= 8):
+        if d_obj < datetime.date(2025, 9, 8):
+            return False
+        # 1. Ara Tatil: 10 - 14 Kasım 2025
+        if datetime.date(2025, 11, 10) <= d_obj <= datetime.date(2025, 11, 14):
+            return False
+        # Yarıyıl Tatili: 19 - 30 Ocak 2026
+        if datetime.date(2026, 1, 19) <= d_obj <= datetime.date(2026, 1, 30):
+            return False
+        # Ramazan Bayramı: 20 Mart 2026
+        if datetime.date(2026, 3, 20) <= d_obj <= datetime.date(2026, 3, 22):
+            return False
+        # 2. Ara Tatil: 6 - 10 Nisan 2026
+        if datetime.date(2026, 4, 6) <= d_obj <= datetime.date(2026, 4, 10):
+            return False
+        # Kurban Bayramı: 27 - 30 Mayıs 2026
+        if datetime.date(2026, 5, 27) <= d_obj <= datetime.date(2026, 5, 30):
+            return False
+        # Ders Yılı Sonu: 19 Haziran 2026
+        if d_obj > datetime.date(2026, 6, 19):
+            return False
+        return True
+
+    # -------------------------------------------------------------
+    # 2024 - 2025 Eğitim ve Öğretim Yılı (MEB Resmî Çalışma Takvimi)
+    # -------------------------------------------------------------
+    if (yil == 2024 and ay >= 7) or (yil == 2025 and ay <= 8):
+        if d_obj < datetime.date(2024, 9, 9):
+            return False
+        # 1. Ara Tatil: 11 - 15 Kasım 2024
+        if datetime.date(2024, 11, 11) <= d_obj <= datetime.date(2024, 11, 15):
+            return False
+        # Yarıyıl Tatili: 20 - 31 Ocak 2025
+        if datetime.date(2025, 1, 20) <= d_obj <= datetime.date(2025, 1, 31):
+            return False
+        # 2. Ara Tatil & Ramazan Bayramı: 31 Mart - 4 Nisan 2025
+        if datetime.date(2025, 3, 31) <= d_obj <= datetime.date(2025, 4, 4):
+            return False
+        # Kurban Bayramı: 6 - 9 Haziran 2025
+        if datetime.date(2025, 6, 6) <= d_obj <= datetime.date(2025, 6, 9):
+            return False
+        # Ders Yılı Sonu: 20 Haziran 2025
+        if d_obj > datetime.date(2025, 6, 20):
+            return False
+        return True
+
+    # Genel Şablon (Diğer yıllar için standart MEB tatil periyotları)
+    if ay in [7, 8] or (ay == 6 and gun > 20) or (ay == 9 and gun < 8):
         return False
-    # Yarıyıl / Sömestr Tatili (18 Ocak - 2 Şubat)
-    if (m == 1 and d >= 18) or (m == 2 and d <= 2):
+    if ay == 11 and 10 <= gun <= 16:
         return False
-    # 2. Dönem Ara Tatil (12-16 Nisan)
-    if m == 4 and (12 <= d <= 16):
+    if (ay == 1 and gun >= 20) or (ay == 2 and gun <= 5):
         return False
-    # Resmi Tatiller (29 Ekim, 1 Ocak, 23 Nisan, 1 Mayıs, 19 Mayıs)
-    if (m == 10 and d == 29) or (m == 1 and d == 1) or (m == 4 and d == 23) or (m == 5 and d in [1, 19]):
+    if ay == 4 and 10 <= gun <= 16:
         return False
+
     return True
 
 def oturum_oku():
@@ -1229,7 +1413,8 @@ def main(page: ft.Page):
     page.title = "Hane Bütçesi Takip Sistemi"
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.scroll = ft.ScrollMode.AUTO
-    page.bgcolor = "#f8fafc"
+    page.bgcolor = "#f1f5f9"
+    page.theme_mode = ft.ThemeMode.LIGHT
 
     try:
         if hasattr(page, "window"):
@@ -1262,7 +1447,8 @@ def main(page: ft.Page):
     def ana_ekrana_git(kullanici, yonetici_mi):
         page.clean()
         page.scroll = ft.ScrollMode.AUTO
-        page.bgcolor = "#f8fafc"
+        page.bgcolor = "#f1f5f9"
+        page.theme_mode = ft.ThemeMode.LIGHT
 
         # Aktif Bütçe Dönemi Durumu
         varsayilan_bas, varsayilan_bit = aktif_butce_donemini_bul()
@@ -1693,6 +1879,7 @@ def main(page: ft.Page):
 
         uye_cuzdan_metni = ft.Text("", size=11, color="#cbd5e1")
 
+        # Lüks Modern Fintech Bakiye Kartı (Gece Mavisi / Zümrüt & Safir Vurgulu)
         bakiye_karti = ft.Container(
             content=ft.Column([
                 ft.Row([
@@ -1701,37 +1888,59 @@ def main(page: ft.Page):
                         kasa_tutar_metni
                     ], spacing=2),
                     ft.Container(
-                        content=ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, color="#38bdf8", size=28),
+                        content=ft.Icon(ft.Icons.WALLET_ROUNDED, color="#38bdf8", size=24),
                         bgcolor="#1e293b",
+                        border=make_border_all(1, "#334155"),
                         border_radius=12,
-                        padding=8
+                        padding=10
                     )
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Divider(height=14, color="#334155"),
-                ft.Row([
-                    ft.Column([
-                        ft.Text("Bu Ay Gelir", size=10, color="#94a3b8"),
-                        bu_ay_gelir_txt
-                    ], spacing=1),
-                    ft.Column([
-                        ft.Text("Bu Ay Gider", size=10, color="#94a3b8"),
-                        bu_ay_gider_txt
-                    ], spacing=1),
-                    ft.Column([
-                        ft.Text("Aylık Net Fark", size=10, color="#94a3b8"),
-                        bu_ay_fark_txt
-                    ], spacing=1),
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Container(height=6),
+                ft.Container(
+                    content=ft.Row([
+                        ft.Container(
+                            content=ft.Column([
+                                ft.Text("Bu Ay Gelir", size=10, color="#94a3b8", weight=ft.FontWeight.W_500),
+                                bu_ay_gelir_txt
+                            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                            bgcolor="#132338",
+                            border_radius=10,
+                            padding=make_padding(8, 6),
+                            expand=1
+                        ),
+                        ft.Container(
+                            content=ft.Column([
+                                ft.Text("Bu Ay Gider", size=10, color="#94a3b8", weight=ft.FontWeight.W_500),
+                                bu_ay_gider_txt
+                            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                            bgcolor="#271822",
+                            border_radius=10,
+                            padding=make_padding(8, 6),
+                            expand=1
+                        ),
+                        ft.Container(
+                            content=ft.Column([
+                                ft.Text("Aylık Net", size=10, color="#94a3b8", weight=ft.FontWeight.W_500),
+                                bu_ay_fark_txt
+                            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                            bgcolor="#162235",
+                            border_radius=10,
+                            padding=make_padding(8, 6),
+                            expand=1
+                        ),
+                    ], spacing=6),
+                ),
                 uye_cuzdan_metni
-            ], spacing=2),
+            ], spacing=4),
             bgcolor="#0f172a",
-            border_radius=16,
+            border=make_border_all(1, "#1e293b"),
+            border_radius=18,
             padding=16,
             width=355,
         )
 
         bakiye_metni = ft.Text("", visible=False)
-        donem_metni = ft.Text(size=12, weight=ft.FontWeight.BOLD, color="blue")
+        donem_metni = ft.Text(size=13, weight=ft.FontWeight.BOLD, color="#1e293b")
         liste_arayuzu = ft.ListView(height=420, spacing=2)
         bilgi_mesaji = ft.Text("", size=12)
 
@@ -1739,6 +1948,7 @@ def main(page: ft.Page):
         secilen_filtre = ["Tümü"]
 
         def filtre_sec(f_adi):
+            dokunma_geribildirimi()
             secilen_filtre[0] = f_adi
             filtre_butonlari_guncelle()
             arayuzu_guncelle()
@@ -1876,7 +2086,7 @@ def main(page: ft.Page):
         def form_toggle(e):
             form_acik[0] = not form_acik[0]
             form_govdesi.visible = form_acik[0]
-            set_button_label(form_ac_kapat_btn, "✕ Formu Kapat" if form_acik[0] else "➕ Yeni İşlem Ekle")
+            set_button_label(form_ac_kapat_btn, "✕ Formu Kapat" if form_acik[0] else "➕ Yeni İşlem")
             form_ac_kapat_btn.bgcolor = "#64748b" if form_acik[0] else "#2563eb"
             liste_arayuzu.height = 240 if form_acik[0] else 420
             try:
@@ -1886,7 +2096,7 @@ def main(page: ft.Page):
             except Exception:
                 page.update()
 
-        form_ac_kapat_btn = make_button("➕ Yeni İşlem Ekle", bgcolor="#2563eb", color="white", height=36, on_click=form_toggle)
+        form_ac_kapat_btn = make_button("➕ Yeni İşlem", bgcolor="#2563eb", color="white", height=40, expand=True, on_click=form_toggle)
 
         form_govdesi = ft.Container(
             content=ft.Column([
@@ -3401,6 +3611,105 @@ def main(page: ft.Page):
                 duzenle_miktar = ft.TextField(label="Miktar", value=item.get("miktar", ""), width=150, dense=True)
                 duzenle_birim_fiyat = ft.TextField(label="Birim Fiyat (TL)", value=str(item.get("birim_fiyat", 0.0)), width=150, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
 
+                # 3'lü Dinamik Hesaplama (Miktar, Birim Fiyat, Toplam Tutar)
+                duzenle_hesaplaniyor = [False]
+                duzenle_kullanici_girdileri = []
+
+                def duzenle_kayit_ekle(alan):
+                    if alan in duzenle_kullanici_girdileri:
+                        duzenle_kullanici_girdileri.remove(alan)
+                    duzenle_kullanici_girdileri.append(alan)
+
+                def duzenle_kayit_sil(alan):
+                    if alan in duzenle_kullanici_girdileri:
+                        duzenle_kullanici_girdileri.remove(alan)
+
+                def duzenle_sayi_formatla(val):
+                    if val == int(val):
+                        return str(int(val))
+                    formatted = f"{val:.2f}"
+                    return formatted.rstrip("0").rstrip(".") if formatted.endswith("0") else formatted
+
+                def duzenle_float_al(val_str):
+                    if not val_str:
+                        return None
+                    try:
+                        clean = str(val_str).strip().replace(",", ".")
+                        match = re.search(r"[-+]?\d*\.?\d+", clean)
+                        if match:
+                            return float(match.group(0))
+                        return float(clean)
+                    except Exception:
+                        return None
+
+                # Mevcut kayıttaki değerlere göre başlangıç önceliği
+                m_init = duzenle_float_al(duzenle_miktar.value)
+                bf_init = duzenle_float_al(duzenle_birim_fiyat.value)
+                t_init = duzenle_float_al(duzenle_tutar.value)
+
+                if m_init is not None and bf_init is not None and bf_init > 0:
+                    duzenle_kullanici_girdileri = ["BF", "M"]
+                elif m_init is not None and t_init is not None and t_init > 0:
+                    duzenle_kullanici_girdileri = ["M", "T"]
+                elif bf_init is not None and t_init is not None and t_init > 0:
+                    duzenle_kullanici_girdileri = ["BF", "T"]
+
+                def duzenle_hesapla_ve_guncelle(tetikleyen_alan):
+                    if duzenle_hesaplaniyor[0]:
+                        return
+
+                    m_val = duzenle_float_al(duzenle_miktar.value)
+                    bf_val = duzenle_float_al(duzenle_birim_fiyat.value)
+                    t_val = duzenle_float_al(duzenle_tutar.value)
+
+                    if m_val is None:
+                        duzenle_kayit_sil("M")
+                    if bf_val is None:
+                        duzenle_kayit_sil("BF")
+                    if t_val is None:
+                        duzenle_kayit_sil("T")
+
+                    if tetikleyen_alan == "M" and m_val is not None:
+                        duzenle_kayit_ekle("M")
+                    elif tetikleyen_alan == "BF" and bf_val is not None:
+                        duzenle_kayit_ekle("BF")
+                    elif tetikleyen_alan == "T" and t_val is not None:
+                        duzenle_kayit_ekle("T")
+
+                    if len(duzenle_kullanici_girdileri) >= 2:
+                        aktif_1 = duzenle_kullanici_girdileri[-1]
+                        aktif_2 = duzenle_kullanici_girdileri[-2]
+
+                        girdi_kumesi = {aktif_1, aktif_2}
+                        kalan_hedef = list({"M", "BF", "T"} - girdi_kumesi)[0]
+
+                        duzenle_hesaplaniyor[0] = True
+                        try:
+                            if kalan_hedef == "T":
+                                if m_val is not None and bf_val is not None:
+                                    duzenle_tutar.value = f"{m_val * bf_val:.2f}"
+                            elif kalan_hedef == "M":
+                                if t_val is not None and bf_val is not None and bf_val > 0:
+                                    duzenle_miktar.value = duzenle_sayi_formatla(t_val / bf_val)
+                            elif kalan_hedef == "BF":
+                                if t_val is not None and m_val is not None and m_val > 0:
+                                    duzenle_birim_fiyat.value = f"{t_val / m_val:.2f}"
+                        finally:
+                            duzenle_hesaplaniyor[0] = False
+                        try:
+                            duzenle_miktar.update()
+                            duzenle_birim_fiyat.update()
+                            duzenle_tutar.update()
+                        except Exception:
+                            try:
+                                page.update()
+                            except Exception:
+                                pass
+
+                duzenle_miktar.on_change = lambda e: duzenle_hesapla_ve_guncelle("M")
+                duzenle_birim_fiyat.on_change = lambda e: duzenle_hesapla_ve_guncelle("BF")
+                duzenle_tutar.on_change = lambda e: duzenle_hesapla_ve_guncelle("T")
+
                 form_kontrolleri = [
                     duzenle_hesap,
                     duzenle_firma,
@@ -3408,6 +3717,7 @@ def main(page: ft.Page):
                     duzenle_kat,
                     ft.Row([duzenle_miktar, duzenle_birim_fiyat], spacing=10),
                     duzenle_tutar,
+                    ft.Text("💡 İkisini girince üçüncüsü (Miktar, Birim Fiyat, Tutar) otomatik hesaplanır.", size=10, color="#64748b"),
                     ft.Row([duzenle_tarih, duzenle_saat], spacing=10)
                 ]
             elif tur == "Gelir":
@@ -3690,27 +4000,28 @@ def main(page: ft.Page):
                     content=ft.Row([
                         ft.Row([
                             ft.Container(
-                                content=ft.Icon(ikon_adi, color=ikon_renk, size=14),
-                                width=24,
-                                height=24,
+                                content=ft.Icon(ikon_adi, color=ikon_renk, size=15),
+                                width=28,
+                                height=28,
                                 bgcolor=ikon_bg,
-                                border_radius=12,
+                                border_radius=14,
                                 alignment=get_alignment_center()
                             ),
                             ft.Column([
-                                ft.Text(baslik, size=12, weight=ft.FontWeight.W_600, no_wrap=True, max_lines=1),
+                                ft.Text(baslik, size=12.5, weight=ft.FontWeight.W_600, color="#0f172a", no_wrap=True, max_lines=1),
                                 ft.Text(alt_detay, size=10, color="#64748b", no_wrap=True, max_lines=1)
                             ], spacing=1, tight=True, expand=True)
-                        ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER, expand=True),
+                        ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER, expand=True),
                         ft.Row([
-                            ft.Text(tutar_metni, size=12, weight=ft.FontWeight.BOLD, color=tutar_rengi),
+                            ft.Text(tutar_metni, size=12.5, weight=ft.FontWeight.BOLD, color=tutar_rengi),
                             duzenle_butonu,
                             sil_butonu
-                        ], spacing=1, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                        ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER)
                     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    padding=make_padding(6, 4),
-                    border=make_border_bottom(0.6, "#f1f5f9"),
-                    border_radius=6,
+                    padding=make_padding(8, 6),
+                    bgcolor="#f8fafc",
+                    border=make_border_all(1, "#f1f5f9"),
+                    border_radius=10,
                 )
                 liste_arayuzu.controls.append(satir)
 
@@ -4067,10 +4378,44 @@ def main(page: ft.Page):
             )
             show_app_dialog(page, cikis_dialog)
 
-        # Dönem Seçim Araç Çubuğu (2 Kademeli, Asla Kırpılmayan ve Taşmayan Tasarım)
-        onceki_btn = make_button("◀", width=36, height=32, outlined=True, tooltip="Önceki Bütçe Dönemi", on_click=lambda _: donem_kaydir("onceki"))
-        sonraki_btn = make_button("▶", width=36, height=32, outlined=True, tooltip="Sonraki Bütçe Dönemi", on_click=lambda _: donem_kaydir("sonraki"))
-        donem_toggle_btn = make_button("🌐 Tüm Zamanları Gör (Filtresiz)", height=32, outlined=True, on_click=tum_zamanlar_toggle)
+        # --- VERİLERİ BULUTTAN YENİLEME / SENKRONİZASYON MERKEZİ ---
+        def verileri_buluttan_yenile(e=None):
+            if not supabase:
+                show_app_snackbar(page, "⚠️ Supabase bulut veritabanı bağlantısı yok.", color="#ef4444")
+                return
+
+            show_app_snackbar(page, "🔄 Buluttan güncel işlemler çekiliyor...", color="#2563eb")
+
+            def _arkaplan_yenile():
+                try:
+                    res = supabase.table("islemler").select("*").order("id", desc=True).limit(2000).execute()
+                    if res and res.data is not None:
+                        onceki_adet = len(islemler)
+                        islemler.clear()
+                        islemler.extend(res.data)
+                        yeni_adet = len(islemler)
+
+                        arayuzu_guncelle()
+
+                        fark = yeni_adet - onceki_adet
+                        if fark > 0:
+                            show_app_snackbar(page, f"✅ {fark} yeni işlem yüklendi! (Toplam {yeni_adet})", color="#10b981")
+                        elif fark < 0:
+                            show_app_snackbar(page, f"✅ Liste güncellendi. (Toplam {yeni_adet})", color="#10b981")
+                        else:
+                            show_app_snackbar(page, f"✅ Veriler güncel. (Toplam {yeni_adet} işlem)", color="#10b981")
+                    else:
+                        show_app_snackbar(page, "⚠️ Buluttan veri alınamadı.", color="#f59e0b")
+                except Exception as ex:
+                    print("Bulut senkronizasyon hatası:", ex)
+                    show_app_snackbar(page, f"Senkronizasyon hatası: {ex}", color="#ef4444")
+
+            threading.Thread(target=_arkaplan_yenile, daemon=True).start()
+
+        # Modern Dönem Seçim Çubuğu (Zarif Oklar, Temiz Tipografi ve Ferah Tasarım)
+        onceki_btn = make_icon_btn(ft.Icons.CHEVRON_LEFT_ROUNDED, icon_size=24, icon_color="#475569", tooltip="Önceki Bütçe Dönemi", on_click=lambda _: donem_kaydir("onceki"))
+        sonraki_btn = make_icon_btn(ft.Icons.CHEVRON_RIGHT_ROUNDED, icon_size=24, icon_color="#475569", tooltip="Sonraki Bütçe Dönemi", on_click=lambda _: donem_kaydir("sonraki"))
+        donem_toggle_btn = make_button("🌐 Tüm Zamanlar (Filtresiz)", height=30, outlined=True, on_click=tum_zamanlar_toggle)
 
         donem_bar = ft.Container(
             content=ft.Column([
@@ -4078,20 +4423,21 @@ def main(page: ft.Page):
                     onceki_btn,
                     donem_metni,
                     sonraki_btn,
-                ], alignment=ft.MainAxisAlignment.CENTER, spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Row([
                     donem_toggle_btn
                 ], alignment=ft.MainAxisAlignment.CENTER)
-            ], spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             bgcolor="white",
             border=make_border_all(1, "#e2e8f0"),
-            border_radius=12,
+            border_radius=16,
             padding=make_padding(8, 6),
             width=355
         )
 
         # Liste Araç Çubuğu (Kronolojik Sıralama, En Başa / En Sona Git ve Toplu Sil)
         def siralama_toggle(e):
+            dokunma_geribildirimi()
             siralama_en_yeni[0] = not siralama_en_yeni[0]
             set_button_label(siralama_btn, "⏱️ Yeni ➔ Eski" if siralama_en_yeni[0] else "⏱️ Eski ➔ Yeni")
             bilgi_mesaji.value = "📅 Sıralama: Yeniden Eskiye (En Son İşlem Üstte)" if siralama_en_yeni[0] else "📅 Sıralama: Kronolojik (Eskiden Yeniye)"
@@ -4109,6 +4455,7 @@ def main(page: ft.Page):
             on_click=siralama_toggle
         )
         toplu_sil_btn = make_button("🗑️ Toplu Sil", height=30, bgcolor="#ef4444", color="white", tooltip="Listelenen Kayıtları Kalıcı Olarak Sil", on_click=toplu_silme_onayi_iste)
+        yenile_btn = make_button("🔄 Yenile", height=30, bgcolor="#10b981", color="white", tooltip="Buluttaki Yeni Kayıtları Getir", on_click=verileri_buluttan_yenile)
 
         liste_ust_bar = ft.Container(
             content=ft.Column([
@@ -4117,7 +4464,10 @@ def main(page: ft.Page):
                         ft.Icon(ft.Icons.RECEIPT_LONG, size=18, color="#1e293b"),
                         ft.Text("İşlem Geçmişi", weight=ft.FontWeight.BOLD, size=14, color="#1e293b"),
                     ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    toplu_sil_btn
+                    ft.Row([
+                        yenile_btn,
+                        toplu_sil_btn
+                    ], spacing=6)
                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Row([
                     siralama_btn,
@@ -4152,8 +4502,11 @@ def main(page: ft.Page):
                         mevcut_harclik_tarihleri.add(standart_tarih_yap(t))
 
             bugun = datetime.date.today()
-            baslangic = secilen_donem_bas[0] if (secilen_donem_bas[0] and secilen_donem_bas[0] <= bugun) else bugun
-            if (bugun - baslangic).days > 45:
+            if secilen_donem_bas[0] and secilen_donem_bas[0] <= bugun:
+                baslangic = secilen_donem_bas[0]
+                if (bugun - baslangic).days > 180:
+                    baslangic = bugun - datetime.timedelta(days=180)
+            else:
                 baslangic = bugun - datetime.timedelta(days=45)
 
             eklenen_adet = 0
@@ -4284,6 +4637,7 @@ def main(page: ft.Page):
                 content=ft.Container(
                     content=ft.Column([
                         ft.Text("Okulların açık olduğu haftaiçi günlerde çocuklara otomatik harçlık ekler.", size=11, color="#64748b"),
+                        ft.Text("📅 MEB 2026-2027 Takvimi: 16-20 Kasım Ara Tatil, 25 Ocak-5 Şubat Sömestr, 8-12 Mart 2. Ara Tatil.", size=10, color="#059669", weight=ft.FontWeight.W_500),
                         aktif_switch,
                         ft.Row([cocuk_sayisi_tf, birim_harclik_tf], spacing=8),
                         tatil_cb,
@@ -4515,26 +4869,45 @@ def main(page: ft.Page):
 
             show_app_dialog(page, stat_dialog)
 
-        # Modern Üst Başlık Barı
+        # Modern ve Sadeleştirilmiş Üst Başlık Barı
+        # Çıkış işlemi doğrudan profil çipine gömüldü; yenileme işlemi ise işlem geçmişinde mevcut.
+        # Böylece hiçbir taşma yaşanmaz, okul harçlığı ve istatistik butonları %100 sorunsuz çalışır.
+        profil_cipi = ft.Container(
+            content=ft.Row([
+                ft.Text(f"👑 {kullanici}" if yonetici_mi else f"👤 {kullanici}", size=11, color="#2563eb", weight=ft.FontWeight.BOLD),
+                ft.Icon(ft.Icons.ARROW_DROP_DOWN_ROUNDED, size=16, color="#2563eb")
+            ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            bgcolor="#eff6ff",
+            border=make_border_all(1, "#bfdbfe"),
+            border_radius=16,
+            padding=make_padding(8, 4),
+            tooltip="Hesap Değiştir veya Çıkış Yap",
+            on_click=cikis_yap_aksiyon
+        )
+
         ust_baslik_bari = ft.Container(
             content=ft.Row([
                 ft.Row([
-                    ft.Text("🏠 Hane Bütçesi", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Container(
-                        content=ft.Text(yetki_metni, size=10, color="white", weight=ft.FontWeight.BOLD),
-                        bgcolor="#2563eb",
-                        border_radius=10,
-                        padding=make_padding(8, 2),
-                        tooltip="Hesap Değiştirmek İçin Dokunun",
-                        on_click=cikis_yap_aksiyon
-                    )
-                ], spacing=8),
+                    ft.Text("🏠 Hane Bütçesi", size=18, weight=ft.FontWeight.BOLD, color="#0f172a"),
+                    profil_cipi
+                ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Row([
-                    ft.IconButton(icon=ft.Icons.SCHOOL_ROUNDED, icon_size=20, icon_color="#f59e0b", tooltip="🎒 Otomatik Okul Harçlığı Ayarları", on_click=harclik_ayarlari_modal_ac),
-                    ft.IconButton(icon=ft.Icons.PIE_CHART_OUTLINE, icon_size=20, icon_color="#2563eb", tooltip="Kategori Grafikleri & İstatistik", on_click=istatistik_ac),
-                    ft.IconButton(icon=ft.Icons.LOGOUT, icon_size=18, tooltip="Çıkış Yap", on_click=cikis_yap_aksiyon)
-                ], spacing=2)
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                    make_icon_btn(
+                        ft.Icons.SCHOOL_ROUNDED, 
+                        icon_size=22, 
+                        icon_color="#f59e0b", 
+                        tooltip="🎒 Otomatik Okul Harçlığı Ayarları", 
+                        on_click=harclik_ayarlari_modal_ac
+                    ),
+                    make_icon_btn(
+                        ft.Icons.PIE_CHART_ROUNDED, 
+                        icon_size=22, 
+                        icon_color="#6366f1", 
+                        tooltip="📊 Kategori Grafikleri & İstatistik", 
+                        on_click=istatistik_ac
+                    )
+                ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             width=355,
             padding=make_padding(0, 4)
         )
@@ -4732,27 +5105,26 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
         sozel_cubuk = ft.Container(
             content=ft.Row([
                 sozel_input,
-                make_button("✨ AI Ekle", height=36, bgcolor="#8b5cf6", color="white", on_click=sozel_islem_calistir)
+                make_button("✨ AI Ekle", height=36, bgcolor="#6366f1", color="white", on_click=sozel_islem_calistir)
             ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             bgcolor="white",
-            border=make_border_all(1.2, "#c4b5fd"),
-            border_radius=12,
+            border=make_border_all(1, "#e2e8f0"),
+            border_radius=14,
             padding=make_padding(6, 6),
             width=355
         )
 
-        # Hızlı Aksiyon Butonları (2 Satırlı Geniş ve Asla Sıkışmayan Tasarım)
+        # Hızlı Aksiyon Butonları (Tamamen Ortalanmış, Eşit Genişlikte Kusursuz Simetrik 2x2 Izgara)
+        btn_yeni_islem = form_ac_kapat_btn
+        btn_fis_tara = make_button("📸 Fiş Tara", bgcolor="#6366f1", color="white", height=40, tooltip="Fiş Fotoğrafı Yükle & AI ile Oku", expand=True, on_click=fis_tara_tiklandi)
+        btn_csv_yukle = make_button("📥 CSV Yükle", bgcolor="white", color="#334155", height=40, outlined=True, tooltip="CSV'den İşlem Yükle", expand=True, on_click=csv_yukle_tiklandi)
+        btn_csv_indir = make_button("📤 CSV İndir", bgcolor="white", color="#334155", height=40, outlined=True, tooltip="Kayıtları CSV Olarak İndir", expand=True, on_click=csv_indir_tiklandi)
+
         hizli_aksiyon_bari = ft.Container(
             content=ft.Column([
-                ft.Row([
-                    form_ac_kapat_btn,
-                    make_button("📸 Fiş Tara", bgcolor="#8b5cf6", color="white", height=36, tooltip="Fiş Fotoğrafı Yükle & AI ile Oku", expand=True, on_click=fis_tara_tiklandi)
-                ], spacing=6),
-                ft.Row([
-                    make_button("📥 CSV Yükle", height=34, outlined=True, tooltip="CSV'den İşlem Yükle", expand=True, on_click=csv_yukle_tiklandi),
-                    make_button("📤 CSV İndir", height=34, outlined=True, tooltip="Kayıtları CSV Olarak İndir", expand=True, on_click=csv_indir_tiklandi)
-                ], spacing=6)
-            ], spacing=6),
+                ft.Row([btn_yeni_islem, btn_fis_tara], spacing=8, alignment=ft.MainAxisAlignment.CENTER),
+                ft.Row([btn_csv_yukle, btn_csv_indir], spacing=8, alignment=ft.MainAxisAlignment.CENTER)
+            ], spacing=8, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             width=355
         )
 
@@ -4760,9 +5132,9 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
         liste_kapsayici = ft.Container(
             content=liste_arayuzu,
             bgcolor="white",
-            border_radius=12,
+            border_radius=16,
             border=make_border_all(1, "#e2e8f0"),
-            padding=4,
+            padding=6,
             width=355
         )
 
