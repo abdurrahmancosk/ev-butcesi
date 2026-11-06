@@ -907,6 +907,148 @@ except Exception:
 # ==============================================================================
 KATEGORILER_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "kategoriler.json")
 GELIR_TURLERI_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "gelir_turleri.json")
+BILDIRIMLER_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "bildirimler.json")
+BILDIRIM_AYARLARI_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "bildirim_ayarlari.json")
+
+def bildirim_ayarlari_oku():
+    if os.path.exists(BILDIRIM_AYARLARI_DOSYASI):
+        try:
+            with open(BILDIRIM_AYARLARI_DOSYASI, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "abdurrahman_topic": "evbutcesi_abdurrahman_bildirim",
+        "hatice_topic": "evbutcesi_hatice_bildirim",
+        "telefon_bildirimleri_aktif": True
+    }
+
+def bildirim_ayarlari_kaydet(ayarlar):
+    try:
+        with open(BILDIRIM_AYARLARI_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump(ayarlar, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def bildirimler_oku():
+    if os.path.exists(BILDIRIMLER_DOSYASI):
+        try:
+            with open(BILDIRIMLER_DOSYASI, "r", encoding="utf-8") as f:
+                d = json.load(f)
+                if isinstance(d, list):
+                    return d
+        except Exception:
+            pass
+    return []
+
+def bildirimler_kaydet(liste):
+    try:
+        with open(BILDIRIMLER_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump(liste[:100], f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def bildirim_ekle(bildirim_obj):
+    mevcut = bildirimler_oku()
+    mevcut_idler = [b.get("id") for b in mevcut]
+    if bildirim_obj.get("id") not in mevcut_idler:
+        mevcut.insert(0, bildirim_obj)
+        bildirimler_kaydet(mevcut)
+        return True
+    return False
+
+def telefon_push_bildirim_gonder(alici, baslik, mesaj, islem_turu="Gider", tutar=0.0):
+    """
+    Kullanıcı isteği: Abdurrahman veya Hatice sisteme işlem eklediğinde,
+    uygulama açık olmasa dahi Android telefon ekranının üstünde kayar (heads-up) bildirim çıkar.
+    ntfy.sh yüksek öncelikli (urgent/5) kanalı ile doğrudan Android Heads-Up bildirimi tetiklenir.
+    """
+    import urllib.request
+    ayarlar = bildirim_ayarlari_oku()
+    if not ayarlar.get("telefon_bildirimleri_aktif", True):
+        return False
+
+    alici_temiz = "hatice" if "hatice" in str(alici).lower() else "abdurrahman"
+    topic = ayarlar.get(f"{alici_temiz}_topic") or f"evbutcesi_{alici_temiz}_bildirim"
+    url = f"https://ntfy.sh/{topic}"
+
+    tags = "moneybag,bell" if islem_turu == "Gelir" else "shopping_cart,bell"
+    if islem_turu == "Para Aktarımı":
+        tags = "incoming_envelope,bell"
+
+    # Güvenli ASCII/RFC-2047 başlık formatı
+    import base64
+    b64_title = "=?utf-8?B?" + base64.b64encode(baslik.encode("utf-8")).decode("ascii") + "?="
+
+    data = mesaj.encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Title": b64_title,
+            "Priority": "urgent",  # Android'de ekranın üstünden kayan heads-up bildirimi açar
+            "Tags": tags,
+            "Click": f"https://ntfy.sh/{topic}",
+            "Content-Type": "text/plain; charset=utf-8"
+        },
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            print(f"✅ Telefon kayar push bildirimi iletildi ({topic}): {resp.status}")
+            return True
+    except Exception as ex:
+        print(f"Push bildirim gönderme denemesi ({topic}):", ex)
+        return False
+
+def bildirim_olustur_ve_gonder(islem, gonderen=None):
+    """İşlem eklendiğinde karşı tarafa hem sistem push bildirimi hem de uygulama içi bildirim iletir."""
+    gonderen_ad = gonderen or islem.get("kullanici") or "Abdurrahman"
+    if "abdurrahman" in gonderen_ad.lower():
+        alici_ad = "Hatice"
+    else:
+        alici_ad = "Abdurrahman"
+
+    tur = islem.get("tur", "Gider")
+    tutar = float(islem.get("tutar") or 0.0)
+
+    if tur == "Gelir":
+        kalem = islem.get("gelir_turu") or islem.get("kaynak") or "Gelir"
+        baslik = f"💰 Yeni Gelir: {kalem}"
+        mesaj = f"{gonderen_ad} sisteme +{tutar:,.2f} TL yeni gelir ekledi."
+    elif tur == "Para Aktarımı":
+        alici_kisi = islem.get("kaynak") or islem.get("aciklama") or "Aile Üyesi"
+        baslik = f"💸 Para Aktarımı: {alici_kisi}"
+        mesaj = f"{gonderen_ad} {tutar:,.2f} TL tutarında para aktarımı yaptı."
+    else:
+        firma = islem.get("firma") or "Market"
+        urun = islem.get("urun") or islem.get("kategori") or "Harcama"
+        baslik = f"🛒 Yeni Harcama: {firma}"
+        mesaj = f"{gonderen_ad} {tutar:,.2f} TL tutarında harcama ekledi ({urun})."
+
+    simdi = datetime.datetime.now()
+    yeni_bld = {
+        "id": f"bld_{islem.get('id') or int(time.time()*1000)}_{int(time.time())}",
+        "islem_id": islem.get("id"),
+        "tur": tur,
+        "gonderen": gonderen_ad,
+        "alici": alici_ad,
+        "baslik": baslik,
+        "mesaj": mesaj,
+        "tutar": tutar,
+        "tarih": islem.get("tarih") or simdi.strftime("%d.%m.%Y"),
+        "saat": islem.get("saat") or simdi.strftime("%H:%M"),
+        "okundu": False
+    }
+
+    # 1. Yerel bildirim geçmişine kaydet
+    bildirim_ekle(yeni_bld)
+
+    # 2. Telefon kapalı olsa dahi ekranda kayan Android bildirimini push et
+    threading.Thread(
+        target=lambda: telefon_push_bildirim_gonder(alici_ad, baslik, mesaj, islem_turu=tur, tutar=tutar),
+        daemon=True
+    ).start()
 
 # Kapsamlı Standart Harcama Kategorileri (Tüm ev, aile, araç, eğitim ve kişisel harcamaları kapsar)
 VARSAYILAN_GIDER_KATEGORILERI = [
@@ -3437,6 +3579,15 @@ def main(page: ft.Page):
                                 eklenen_adet += 1
                                 eklenen_toplam += itm["tutar"]
 
+                        if eklenen_adet > 0:
+                            bildirim_olustur_ve_gonder({
+                                "tur": "Gider",
+                                "firma": "Fiş / Fatura",
+                                "urun": f"{eklenen_adet} kalem fiş harcaması",
+                                "tutar": eklenen_toplam,
+                                "kullanici": harcayan_hesap
+                            }, gonderen=harcayan_hesap)
+
                         close_app_dialog(page, toplu_fis_dialog)
 
                         # Otomatik tüm zamanlar ve tüm kategorilere al
@@ -5062,6 +5213,7 @@ def main(page: ft.Page):
                         print("Bulut kayıt hatası:", ex)
 
                 islemler.insert(0, yeni_kayit)
+                bildirim_olustur_ve_gonder(yeni_kayit, gonderen=kullanici)
                 gelir_kaynagi.value = ""
                 gelir_aciklamasi.value = ""
                 gelir_tutari.value = ""
@@ -5108,6 +5260,7 @@ def main(page: ft.Page):
                         print("Bulut kayıt hatası:", ex)
 
                 islemler.insert(0, yeni_kayit)
+                bildirim_olustur_ve_gonder(yeni_kayit, gonderen=kullanici)
                 aktarim_tutari.value = ""
                 aktarim_aciklamasi.value = ""
 
@@ -5178,6 +5331,7 @@ def main(page: ft.Page):
                         print("Bulut kayıt hatası:", ex)
 
                 islemler.insert(0, yeni_kayit)
+                bildirim_olustur_ve_gonder(yeni_kayit, gonderen=kullanici)
 
                 gider_firma.value = ""
                 gider_urun.value = ""
@@ -5494,6 +5648,13 @@ def main(page: ft.Page):
                 gecici_gun += datetime.timedelta(days=1)
 
             if eklenen_adet > 0:
+                bildirim_olustur_ve_gonder({
+                    "tur": "Gider",
+                    "firma": "Nakit",
+                    "urun": f"Okul Harçlığı ({eklenen_adet} Gün)",
+                    "tutar": eklenen_adet * toplam_tutar,
+                    "kullanici": kullanici or "Ev Yöneticisi"
+                }, gonderen=kullanici or "Ev Yöneticisi")
                 arayuzu_guncelle()
                 toplam_eklenen_tl = format_turk_para(eklenen_adet * toplam_tutar)
                 msg = f"🎒 {eklenen_adet} okul günü için toplam {toplam_eklenen_tl} TL harçlık eklendi!"
@@ -5813,6 +5974,326 @@ def main(page: ft.Page):
 
             show_app_dialog(page, stat_dialog)
 
+        # --- CANLI KAYAR BİLDİRİM VE BİLDİRİMLER MERKEZİ ---
+        canli_bildirim_icon = ft.Icon(ft.Icons.NOTIFICATIONS_ACTIVE_ROUNDED, color="#f59e0b", size=22)
+        canli_bildirim_baslik = ft.Text("", size=12, weight=ft.FontWeight.BOLD, color="white")
+        canli_bildirim_mesaj = ft.Text("", size=11, color="#cbd5e1", max_lines=2)
+
+        def canli_bildirim_kapat(e=None):
+            canli_bildirim_bari.visible = False
+            try:
+                page.update()
+            except Exception:
+                pass
+
+        def canli_bildirim_goster(baslik, mesaj, tur="Gider"):
+            canli_bildirim_baslik.value = baslik
+            canli_bildirim_mesaj.value = mesaj
+            if tur == "Gelir":
+                canli_bildirim_icon.name = ft.Icons.SAVINGS_ROUNDED
+                canli_bildirim_icon.color = "#10b981"
+                canli_bildirim_bari.border = make_border_all(1, "#10b981")
+            elif tur == "Para Aktarımı":
+                canli_bildirim_icon.name = ft.Icons.PAYMENTS_ROUNDED
+                canli_bildirim_icon.color = "#38bdf8"
+                canli_bildirim_bari.border = make_border_all(1, "#38bdf8")
+            else:
+                canli_bildirim_icon.name = ft.Icons.SHOPPING_BAG_ROUNDED
+                canli_bildirim_icon.color = "#f59e0b"
+                canli_bildirim_bari.border = make_border_all(1, "#f59e0b")
+
+            canli_bildirim_bari.visible = True
+            dokunma_geribildirimi()
+            try:
+                page.update()
+            except Exception:
+                pass
+
+            def oto_kapat():
+                time.sleep(7)
+                canli_bildirim_kapat()
+
+            threading.Thread(target=oto_kapat, daemon=True).start()
+
+        # Ekranın üstünden kayan canlı bildirim kartı
+        canli_bildirim_bari = ft.Container(
+            content=ft.Row([
+                canli_bildirim_icon,
+                ft.Column([
+                    canli_bildirim_baslik,
+                    canli_bildirim_mesaj
+                ], spacing=1, expand=True),
+                ft.IconButton(
+                    icon=ft.Icons.CLOSE_ROUNDED,
+                    icon_size=16,
+                    icon_color="#94a3b8",
+                    tooltip="Kapat",
+                    on_click=canli_bildirim_kapat
+                )
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            bgcolor="#0f172a",
+            border=make_border_all(1, "#f59e0b"),
+            border_radius=12,
+            padding=make_padding(10, 8),
+            width=355,
+            visible=False,
+            shadow=ft.BoxShadow(spread_radius=1, blur_radius=8, color="#44000000", offset=ft.Offset(0, 3)),
+            on_click=lambda _: (canli_bildirim_kapat(), bildirimler_paneli_ac())
+        )
+
+        # Bildirim zili ve okunmamış sayı rozeti
+        bildirim_rozet_metni = ft.Text("", size=9, weight=ft.FontWeight.BOLD, color="white")
+        bildirim_rozet = ft.Container(
+            content=bildirim_rozet_metni,
+            bgcolor="#ef4444",
+            border_radius=10,
+            padding=make_padding(4, 1),
+            visible=False
+        )
+
+        bildirim_ikonu = ft.IconButton(
+            icon=ft.Icons.NOTIFICATIONS_OUTLINED,
+            icon_size=21,
+            icon_color="#334155",
+            tooltip="Bildirimler Merkezi",
+            on_click=lambda _: bildirimler_paneli_ac()
+        )
+
+        bildirim_butonu = ft.Container(
+            content=ft.Stack([
+                bildirim_ikonu,
+                ft.Container(
+                    content=bildirim_rozet,
+                    right=2,
+                    top=2
+                )
+            ]),
+            padding=0
+        )
+
+        def bildirim_sayaci_guncelle():
+            tum = bildirimler_oku()
+            okunmamislar = [b for b in tum if b.get("alici") == kullanici and not b.get("okundu")]
+            adet = len(okunmamislar)
+            if adet > 0:
+                bildirim_rozet_metni.value = str(adet) if adet < 99 else "99+"
+                bildirim_rozet.visible = True
+                bildirim_ikonu.icon = ft.Icons.NOTIFICATIONS_ACTIVE_ROUNDED
+                bildirim_ikonu.icon_color = "#f59e0b"
+            else:
+                bildirim_rozet.visible = False
+                bildirim_ikonu.icon = ft.Icons.NOTIFICATIONS_OUTLINED
+                bildirim_ikonu.icon_color = "#334155"
+            try:
+                bildirim_butonu.update()
+            except Exception:
+                pass
+
+        # Telefon Bildirimleri (Kapalıyken Kayar Bildirim) Ayarları ve Test Paneli
+        def telefon_bildirim_ayarlari_modal_ac(e=None):
+            dokunma_geribildirimi()
+            ayarlar = bildirim_ayarlari_oku()
+            aktif_topic = ayarlar.get("hatice_topic" if "hatice" in kullanici.lower() else "abdurrahman_topic")
+            
+            test_durum_txt = ft.Text("", size=12, color="#10b981")
+
+            def test_bildirimi_gonder_aksiyon(ev):
+                dokunma_geribildirimi()
+                test_durum_txt.value = "⏳ Test bildirimi telefona iletiliyor..."
+                test_durum_txt.color = "#2563eb"
+                try:
+                    page.update()
+                except Exception:
+                    pass
+
+                def gonder_islem():
+                    basari = telefon_push_bildirim_gonder(
+                        alici=kullanici,
+                        baslik="🔔 Test: Ev Bütçesi Kayar Bildirim",
+                        mesaj=f"Tebrikler {kullanici}! Telefon uygulaması kapalı olsa bile ekranın üstünde kayan bildirim başarıyla çalışıyor.",
+                        islem_turu="Gelir"
+                    )
+                    if basari:
+                        test_durum_txt.value = "✅ Bildirim telefonunuza gönderildi! Ekranın üstünü kontrol edin."
+                        test_durum_txt.color = "#10b981"
+                    else:
+                        test_durum_txt.value = "⚠️ Bildirim gönderilemedi, internet bağlantınızı kontrol edin."
+                        test_durum_txt.color = "#ef4444"
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
+
+                threading.Thread(target=gonder_islem, daemon=True).start()
+
+            def tarayicida_kanali_ac(ev):
+                dokunma_geribildirimi()
+                ch_url = f"https://ntfy.sh/{aktif_topic}"
+                try:
+                    page.launch_url(ch_url)
+                except Exception:
+                    pass
+
+            tel_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.PHONELINK_RING_ROUNDED, color="#2563eb", size=22),
+                    ft.Text("Telefon Kayar Bildirim Ayarı", size=16, weight=ft.FontWeight.BOLD)
+                ], spacing=8),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Text(
+                            "Abdurrahman veya Hatice işlem eklediğinde, telefonunuz kapalı veya uygulama arka planda olsa dahi ekranın üstünde kayar bildirim görünür.",
+                            size=11, color="#475569"
+                        ),
+                        ft.Container(
+                            content=ft.Column([
+                                ft.Text(f"👤 Aktif Hesap: {kullanici}", size=12, weight=ft.FontWeight.BOLD, color="#1e293b"),
+                                ft.Text(f"📡 Bildirim Kanalı: {aktif_topic}", size=11, color="#2563eb", weight=ft.FontWeight.W_600),
+                            ], spacing=2),
+                            bgcolor="#eff6ff",
+                            border=make_border_all(1, "#bfdbfe"),
+                            border_radius=8,
+                            padding=make_padding(8, 6)
+                        ),
+                        ft.Text("Telefonunuzda kayar bildirimleri etkinleştirmek için:", size=11, weight=ft.FontWeight.W_600),
+                        make_button("🌐 Tarayıcıda Aç & İzin Ver (Uygulamasız)", height=34, outlined=True, on_click=tarayicida_kanali_ac),
+                        ft.Text("Veya Google Play'den ücretsiz 'ntfy' uygulamasını kurarak kanal adını ekleyebilirsiniz.", size=10, color="#64748b"),
+                        make_button("🔔 Şimdi Test Bildirimi Gönder", height=36, bgcolor="#10b981", color="white", on_click=test_bildirimi_gonder_aksiyon),
+                        test_durum_txt
+                    ], spacing=10, tight=True, scroll=ft.ScrollMode.AUTO),
+                    width=320,
+                    height=360
+                ),
+                actions=[
+                    make_button("✕ Kapat", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, tel_dialog))
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+            show_app_dialog(page, tel_dialog)
+
+        # Kullanıcı İsteği: Uygulama için de bildirimler bölmesi olsun kullanışlı bir yerde
+        def bildirimler_paneli_ac(e=None):
+            dokunma_geribildirimi()
+            bld_listesi_kolon = ft.Column([], spacing=8, scroll=ft.ScrollMode.AUTO)
+
+            def bildirim_listesini_ciz():
+                bld_listesi_kolon.controls.clear()
+                tum_bld = bildirimler_oku()
+                # Bu kullanıcıya ait olanlar ve genel bildirimler
+                kullanici_bld = [b for b in tum_bld if b.get("alici") == kullanici or not b.get("alici")]
+
+                if not kullanici_bld:
+                    bld_listesi_kolon.controls.append(
+                        ft.Container(
+                            content=ft.Column([
+                                ft.Icon(ft.Icons.MARK_EMAIL_READ_ROUNDED, size=40, color="#94a3b8"),
+                                ft.Text("Henüz bir bildirim yok", size=13, weight=ft.FontWeight.W_600, color="#64748b"),
+                                ft.Text("Abdurrahman veya Hatice yeni bir gelir/gider eklediğinde burada listelenir.", size=10, color="#94a3b8", text_align=ft.TextAlign.CENTER)
+                            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+                            padding=make_padding(20, 20),
+                            alignment=ft.alignment.center
+                        )
+                    )
+                else:
+                    for bld in kullanici_bld:
+                        okundu = bld.get("okundu", False)
+                        b_tur = bld.get("tur", "Gider")
+                        b_id = bld.get("id")
+
+                        def bildirime_tiklandi(ev, secili_bld=bld):
+                            dokunma_geribildirimi()
+                            secili_bld["okundu"] = True
+                            bildirimler_kaydet(tum_bld)
+                            bildirim_sayaci_guncelle()
+                            close_app_dialog(page, bld_dialog)
+
+                        icon_renk = "#10b981" if b_tur == "Gelir" else "#38bdf8" if b_tur == "Para Aktarımı" else "#f59e0b"
+                        icon_ad = ft.Icons.SAVINGS_ROUNDED if b_tur == "Gelir" else ft.Icons.PAYMENTS_ROUNDED if b_tur == "Para Aktarımı" else ft.Icons.SHOPPING_BAG_ROUNDED
+
+                        kart = ft.Container(
+                            content=ft.Row([
+                                ft.Container(
+                                    content=ft.Icon(icon_ad, size=20, color=icon_renk),
+                                    bgcolor="#f1f5f9",
+                                    border_radius=8,
+                                    padding=6
+                                ),
+                                ft.Column([
+                                    ft.Row([
+                                        ft.Text(bld.get("baslik", "Bildirim"), size=12, weight=ft.FontWeight.BOLD, color="#0f172a", expand=True),
+                                        ft.Text(f"{bld.get('tarih','')} {bld.get('saat','')}"[:14], size=9, color="#94a3b8")
+                                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                                    ft.Text(bld.get("mesaj", ""), size=11, color="#334155"),
+                                    ft.Row([
+                                        ft.Text("● Yeni" if not okundu else "✓ Okundu", size=9, color="#ef4444" if not okundu else "#94a3b8", weight=ft.FontWeight.BOLD if not okundu else ft.FontWeight.NORMAL)
+                                    ])
+                                ], spacing=2, expand=True)
+                            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START),
+                            bgcolor="#f8fafc" if okundu else "#eff6ff",
+                            border=make_border_all(1, "#e2e8f0" if okundu else "#bfdbfe"),
+                            border_radius=10,
+                            padding=make_padding(8, 8),
+                            on_click=bildirime_tiklandi
+                        )
+                        bld_listesi_kolon.controls.append(kart)
+
+                try:
+                    bld_dialog.update()
+                except Exception:
+                    pass
+
+            def tumunu_okundu_yap(ev):
+                dokunma_geribildirimi()
+                tum_bld = bildirimler_oku()
+                for b in tum_bld:
+                    if b.get("alici") == kullanici or not b.get("alici"):
+                        b["okundu"] = True
+                bildirimler_kaydet(tum_bld)
+                bildirim_sayaci_guncelle()
+                bildirim_listesini_ciz()
+
+            def tum_bildirimleri_temizle(ev):
+                dokunma_geribildirimi()
+                tum_bld = bildirimler_oku()
+                kalanlar = [b for b in tum_bld if b.get("alici") != kullanici and b.get("alici")]
+                bildirimler_kaydet(kalanlar)
+                bildirim_sayaci_guncelle()
+                bildirim_listesini_ciz()
+
+            bld_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.NOTIFICATIONS_ROUNDED, color="#f59e0b", size=24),
+                    ft.Text("Bildirimler Bölmesi", size=16, weight=ft.FontWeight.BOLD)
+                ], spacing=8),
+                content=ft.Container(
+                    content=ft.Column([
+                        # Üst Hızlı İşlem Barı
+                        ft.Row([
+                            make_button("✓ Tümünü Okundu Say", height=28, outlined=True, on_click=tumunu_okundu_yap),
+                            make_button("🗑️ Temizle", height=28, outlined=True, on_click=tum_bildirimleri_temizle),
+                        ], spacing=6, alignment=ft.MainAxisAlignment.CENTER),
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.PHONE_ANDROID_ROUNDED, size=16, color="#2563eb"),
+                                ft.Text("Kapalıyken Kayar Bildirim Ayarı", size=11, color="#2563eb", weight=ft.FontWeight.W_600),
+                            ], spacing=4),
+                            on_click=lambda _: (close_app_dialog(page, bld_dialog), telefon_bildirim_ayarlari_modal_ac()),
+                            padding=make_padding(4, 2)
+                        ),
+                        ft.Divider(height=6, color="#e2e8f0"),
+                        bld_listesi_kolon
+                    ], spacing=8, tight=True),
+                    width=320,
+                    height=380
+                ),
+                actions=[
+                    make_button("✕ Kapat", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, bld_dialog))
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+            bildirim_listesini_ciz()
+            show_app_dialog(page, bld_dialog)
+
         # Kullanıcı İsteği: Ana ekranda hangi hesapta işlem yapıldığını görmek amacıyla sadece
         # kullanıcı ismi rozeti yer alsın; hesap değiştirme ve çıkış işlemleri ise tek bir yerden
         # (üç çizgi menüsünden) yapılsın.
@@ -5912,6 +6393,12 @@ def main(page: ft.Page):
                             subtitle=ft.Text("Gelirler için yeni tür tanımla", size=10, color="#64748b"),
                             on_click=lambda _: menu_aksiyon_calistir(yeni_gelir_turu_dialog_ac)
                         ),
+                        ft.ListTile(
+                            leading=ft.Icon(ft.Icons.NOTIFICATIONS_ROUNDED, color="#f59e0b"),
+                            title=ft.Text("Bildirimler Bölmesi", size=13, weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text("İşlem bildirimleri ve kayar bildirim ayarı", size=10, color="#64748b"),
+                            on_click=lambda _: menu_aksiyon_calistir(bildirimler_paneli_ac)
+                        ),
                         ft.Divider(height=6, color="#e2e8f0"),
                         ft.ListTile(
                             leading=ft.Icon(ft.Icons.PALETTE_OUTLINED, color="#7c3aed"),
@@ -5965,7 +6452,10 @@ def main(page: ft.Page):
                     menu_btn,
                     ft.Text("🏠 Hane Bütçesi", size=17.5, weight=ft.FontWeight.BOLD)
                 ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                profil_cipi
+                ft.Row([
+                    bildirim_butonu,
+                    profil_cipi
+                ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER)
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             width=355,
             padding=make_padding(0, 4)
@@ -6120,6 +6610,7 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                         yeni_islem["id"] = (max(mevcut_idler) + 1) if mevcut_idler else 1
 
                     islemler.insert(0, yeni_islem)
+                    bildirim_olustur_ve_gonder(yeni_islem, gonderen=kullanici)
                     sozel_input.value = ""
                     arayuzu_guncelle()
                     try:
@@ -6245,6 +6736,7 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
         page.add(
             ft.Column([
                 ft.Container(height=2),
+                canli_bildirim_bari,
                 ust_baslik_bari,
                 donem_bar,
                 bakiye_karti,
@@ -6261,7 +6753,68 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                 ft.Container(height=15)
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
         )
+        bildirim_sayaci_guncelle()
         arayuzu_guncelle()
+
+        # Diğer kullanıcının eklediği işlemleri dinleyen arka plan izleme servisi
+        bilinen_islem_idler = set(str(it.get("id")) for it in islemler if it.get("id"))
+
+        def arka_plan_bildirim_tara():
+            while True:
+                try:
+                    time.sleep(14)
+                    if not supabase:
+                        continue
+                    res = supabase.table("islemler").select("*").order("id", desc=True).limit(25).execute()
+                    if res and res.data:
+                        yeni_bulunanlar = []
+                        for it in res.data:
+                            it_id_str = str(it.get("id"))
+                            if it_id_str and it_id_str not in bilinen_islem_idler:
+                                bilinen_islem_idler.add(it_id_str)
+                                it_kull = str(it.get("kullanici", "")).strip()
+                                # Eğer işlem diğer kullanıcı tarafından yapılmışsa
+                                if it_kull and it_kull.lower() != kullanici.lower():
+                                    yeni_bulunanlar.append(it)
+                        if yeni_bulunanlar:
+                            for it in yeni_bulunanlar:
+                                if it not in islemler:
+                                    islemler.insert(0, it)
+                                tur_it = it.get("tur", "Gider")
+                                tutar_it = float(it.get("tutar") or 0.0)
+                                kim_it = it.get("kullanici") or "Aile Üyesi"
+                                if tur_it == "Gelir":
+                                    b_bas = f"💰 Yeni Gelir: {it.get('gelir_turu') or it.get('kaynak') or 'Gelir'}"
+                                    b_mes = f"{kim_it} +{tutar_it:,.2f} TL yeni gelir ekledi."
+                                elif tur_it == "Para Aktarımı":
+                                    b_bas = f"💸 Para Aktarımı: {it.get('kaynak') or 'Aktarım'}"
+                                    b_mes = f"{kim_it} {tutar_it:,.2f} TL aktarım yaptı."
+                                else:
+                                    b_bas = f"🛒 Yeni Harcama: {it.get('firma') or 'Market'}"
+                                    b_mes = f"{kim_it} {tutar_it:,.2f} TL harcama ekledi ({it.get('urun') or it.get('kategori') or 'Ürün'})."
+
+                                simdi_it = datetime.datetime.now()
+                                yeni_bld_it = {
+                                    "id": f"bld_{it.get('id')}_{int(time.time())}",
+                                    "islem_id": it.get("id"),
+                                    "tur": tur_it,
+                                    "gonderen": kim_it,
+                                    "alici": kullanici,
+                                    "baslik": b_bas,
+                                    "mesaj": b_mes,
+                                    "tutar": tutar_it,
+                                    "tarih": it.get("tarih") or simdi_it.strftime("%d.%m.%Y"),
+                                    "saat": it.get("saat") or simdi_it.strftime("%H:%M"),
+                                    "okundu": False
+                                }
+                                bildirim_ekle(yeni_bld_it)
+                                canli_bildirim_goster(b_bas, b_mes, tur_it)
+                            bildirim_sayaci_guncelle()
+                            arayuzu_guncelle()
+                except Exception as ex_tara:
+                    pass
+
+        threading.Thread(target=arka_plan_bildirim_tara, daemon=True).start()
 
         # Uygulama açılışında okulların açık olduğu günleri otomatik kontrol et ve harçlık ekle
         try:
