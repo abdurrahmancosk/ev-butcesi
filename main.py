@@ -905,23 +905,128 @@ except Exception:
 # ==============================================================================
 # Standart Harcama Kategorileri
 # ==============================================================================
-GIDER_KATEGORILERI = [
+KATEGORILER_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "kategoriler.json")
+GELIR_TURLERI_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "gelir_turleri.json")
+
+# Kapsamlı Standart Harcama Kategorileri (Tüm ev, aile, araç, eğitim ve kişisel harcamaları kapsar)
+VARSAYILAN_GIDER_KATEGORILERI = [
     "Market & Temel Gıda",
+    "Kasap & Şarküteri & Manav",
+    "Fırın & Unlu Mamuller",
     "Abur Cubur & Atıştırmalık",
-    "Temizlik",
-    "Sigara/Tütün",
-    "Ev & Faturalar",
-    "Ulaşım / Yakıt",
-    "Dışarıda Yemek / Eğlence",
-    "Giyim",
-    "Sağlık",
-    "Eğitim & Okul",
+    "Ev & Faturalar (Elektrik, Su, Doğalgaz)",
+    "Kira & Aidat",
+    "İnternet, Telefon & TV",
+    "Temizlik & Hijyen",
+    "Kişisel Bakım & Kozmetik",
+    "Giyim, Ayakkabı & Aksesuar",
+    "Sağlık, İlaç & Medikal",
+    "Eğitim, Okul & Kırtasiye",
+    "Çocuk & Bebek",
+    "Ulaşım & Toplu Taşıma",
+    "Akaryakıt & Yakıt",
+    "Araç Bakım & Muayene & Servis",
+    "Dışarıda Yemek & Kafe & Restoran",
+    "Eğlence, Kültür & Etkinlik",
+    "Elektronik & Teknoloji",
+    "Ev Eşyası & Mobilya & Beyaz Eşya",
+    "Tadilat, Tamirat & Yapı Market",
     "Evcil Hayvan (Pamuk)",
+    "Sigara/Tütün",
+    "Spor, Fitness & Hobi",
+    "Tatil & Seyahat & Konaklama",
+    "Hediye, Bağış & Yardımlaşma",
+    "Kredi Kartı, Kredi Ödemesi & Borç",
+    "Vergi, Harç & Resmi İşlemler",
+    "Sigorta, Kasko & Bireysel Emeklilik",
     "Transfer / Birikim",
-    "Yatırım",
-    "Yatırım / Altın",
+    "Yatırım & Altın & Döviz",
     "Diğer"
 ]
+
+# Güncellenmiş Gelir Türleri (Ek Ders ve Hediye eklendi, Kira Geliri ve Yatırım/Faiz silindi)
+VARSAYILAN_GELIR_TURLERI = [
+    "Maaş",
+    "Ek Ders",
+    "Hediye",
+    "Ek Gelir / Serbest",
+    "Diğer"
+]
+
+def kategoriler_oku():
+    if os.path.exists(KATEGORILER_DOSYASI):
+        try:
+            with open(KATEGORILER_DOSYASI, "r", encoding="utf-8") as f:
+                veriler = json.load(f)
+                if isinstance(veriler, list) and len(veriler) > 0:
+                    return veriler
+        except Exception:
+            pass
+    return list(VARSAYILAN_GIDER_KATEGORILERI)
+
+def kategoriler_kaydet(kat_listesi):
+    try:
+        with open(KATEGORILER_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump(kat_listesi, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def gelir_turleri_oku():
+    if os.path.exists(GELIR_TURLERI_DOSYASI):
+        try:
+            with open(GELIR_TURLERI_DOSYASI, "r", encoding="utf-8") as f:
+                veriler = json.load(f)
+                if isinstance(veriler, list) and len(veriler) > 0:
+                    return veriler
+        except Exception:
+            pass
+    return list(VARSAYILAN_GELIR_TURLERI)
+
+def gelir_turleri_kaydet(tur_listesi):
+    try:
+        with open(GELIR_TURLERI_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump(tur_listesi, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def kategori_ekle(yeni_kat):
+    yeni = str(yeni_kat).strip()
+    if not yeni:
+        return False
+    mevcut = kategoriler_oku()
+    if yeni not in mevcut:
+        if "Diğer" in mevcut:
+            mevcut.remove("Diğer")
+            mevcut.append(yeni)
+            mevcut.append("Diğer")
+        else:
+            mevcut.append(yeni)
+        kategoriler_kaydet(mevcut)
+        GIDER_KATEGORILERI.clear()
+        GIDER_KATEGORILERI.extend(mevcut)
+        return True
+    return False
+
+def gelir_turu_ekle(yeni_tur):
+    yeni = str(yeni_tur).strip()
+    if not yeni:
+        return False
+    mevcut = gelir_turleri_oku()
+    if yeni not in mevcut:
+        if "Diğer" in mevcut:
+            mevcut.remove("Diğer")
+            mevcut.append(yeni)
+            mevcut.append("Diğer")
+        else:
+            mevcut.append(yeni)
+        gelir_turleri_kaydet(mevcut)
+        GELIR_TURLERI.clear()
+        GELIR_TURLERI.extend(mevcut)
+        return True
+    return False
+
+GIDER_KATEGORILERI = kategoriler_oku()
+GELIR_TURLERI = gelir_turleri_oku()
 kategoriler = GIDER_KATEGORILERI
 
 GEMINI_KEY_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "gemini_key.json")
@@ -1943,23 +2048,141 @@ def main(page: ft.Page):
             on_click=lambda _: picker_ac(aktarim_date_picker)
         )
 
+        # --- YENİ KATEGORİ VE GELİR TÜRÜ EKLEME MODALLARI ---
+        def yeni_kategori_dialog_ac(e=None):
+            dokunma_geribildirimi()
+            yeni_kat_input = ft.TextField(
+                label="Yeni Kategori Adı (Örn: Bahçe & Çiçek)",
+                autofocus=True,
+                width=280,
+                dense=True
+            )
+            kat_uyari = ft.Text("", color="red", size=12)
+
+            def kat_kaydet_aksiyon(ev):
+                val = yeni_kat_input.value.strip()
+                if not val:
+                    kat_uyari.value = "Lütfen bir kategori adı giriniz."
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
+                    return
+                kategori_ekle(val)
+                mevcut = kategoriler_oku()
+                gider_kategori.options = [make_option(k) for k in mevcut]
+                gider_kategori.value = val
+
+                # Kategori filtre dropdown'ını da güncelle
+                kategori_filtre_listesi = ["Tüm Kategoriler"] + mevcut + gelir_turleri_oku()
+                kategori_filtre_dropdown.options = [make_option(k) for k in kategori_filtre_listesi]
+
+                close_app_dialog(page, kat_dialog)
+                dokunma_geribildirimi()
+                show_app_snackbar(page, f"✅ Yeni kategori eklendi: {val}", color="#10b981")
+                try:
+                    page.update()
+                except Exception:
+                    pass
+
+            kat_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.CATEGORY_ROUNDED, color="#2563eb", size=22),
+                    ft.Text("Yeni Kategori Ekle", size=16, weight=ft.FontWeight.BOLD)
+                ], spacing=8),
+                content=ft.Column([
+                    ft.Text("Harcamalarınız için yeni bir kategori tanımlayın:", size=11, color="#64748b"),
+                    yeni_kat_input,
+                    kat_uyari
+                ], tight=True, spacing=10),
+                actions=[
+                    make_button("İptal", outlined=True, height=32, on_click=lambda _: close_app_dialog(page, kat_dialog)),
+                    make_button("Ekle", bgcolor="#2563eb", color="white", height=32, on_click=kat_kaydet_aksiyon)
+                ]
+            )
+            show_app_dialog(page, kat_dialog)
+
+        def yeni_gelir_turu_dialog_ac(e=None):
+            dokunma_geribildirimi()
+            yeni_tur_input = ft.TextField(
+                label="Yeni Gelir Türü (Örn: Burs, Prim)",
+                autofocus=True,
+                width=280,
+                dense=True
+            )
+            tur_uyari = ft.Text("", color="red", size=12)
+
+            def tur_kaydet_aksiyon(ev):
+                val = yeni_tur_input.value.strip()
+                if not val:
+                    tur_uyari.value = "Lütfen bir gelir türü giriniz."
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
+                    return
+                gelir_turu_ekle(val)
+                mevcut = gelir_turleri_oku()
+                gelir_turu.options = [make_option(k) for k in mevcut]
+                gelir_turu.value = val
+
+                # Kategori filtre dropdown'ını da güncelle
+                kategori_filtre_listesi = ["Tüm Kategoriler"] + kategoriler_oku() + mevcut
+                kategori_filtre_dropdown.options = [make_option(k) for k in kategori_filtre_listesi]
+
+                close_app_dialog(page, tur_dialog)
+                dokunma_geribildirimi()
+                show_app_snackbar(page, f"✅ Yeni gelir türü eklendi: {val}", color="#10b981")
+                try:
+                    page.update()
+                except Exception:
+                    pass
+
+            tur_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.MONEY_ROUNDED, color="#059669", size=22),
+                    ft.Text("Yeni Gelir Türü Ekle", size=16, weight=ft.FontWeight.BOLD)
+                ], spacing=8),
+                content=ft.Column([
+                    ft.Text("Gelirleriniz için yeni bir tür tanımlayın:", size=11, color="#64748b"),
+                    yeni_tur_input,
+                    tur_uyari
+                ], tight=True, spacing=10),
+                actions=[
+                    make_button("İptal", outlined=True, height=32, on_click=lambda _: close_app_dialog(page, tur_dialog)),
+                    make_button("Ekle", bgcolor="#059669", color="white", height=32, on_click=tur_kaydet_aksiyon)
+                ]
+            )
+            show_app_dialog(page, tur_dialog)
+
         # --- GELİR ALANLARI ---
-        gelir_kaynagi = ft.TextField(label="Gelir Kaynağı (Örn: Şirket, Kiracı)", width=320, dense=True)
+        gelir_kaynagi = ft.TextField(label="Gelir Kaynağı (Örn: Şirket, Okul)", width=320, dense=True)
         gelir_turu = make_dropdown(
             label="Gelir Türü",
-            options=["Maaş", "Ek Gelir / Serbest", "Kira Geliri", "Yatırım / Faiz", "Diğer"],
+            options=gelir_turleri_oku(),
             value="Maaş",
-            width=320,
+            width=275,
             dense=True
         )
-        gelir_aciklamasi = ft.TextField(label="Açıklama (Örn: Kasım ayı maaş ödemesi)", width=320, dense=True)
+        gelir_turu_ekle_btn = ft.IconButton(
+            icon=ft.Icons.ADD_CIRCLE_OUTLINE,
+            icon_color="#059669",
+            tooltip="Yeni Gelir Türü Ekle",
+            on_click=yeni_gelir_turu_dialog_ac
+        )
+        gelir_turu_satiri = ft.Row(
+            [gelir_turu, gelir_turu_ekle_btn],
+            alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER
+        )
+        gelir_aciklamasi = ft.TextField(label="Açıklama (Örn: Kasım ayı ek ders ödemesi)", width=320, dense=True)
         gelir_tutari = ft.TextField(label="Tutar (TL)", width=320, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
 
         gelir_form_kutusu = ft.Column([
             ft.Text("Tarih ve Saat Seçimi:", size=12, color="grey"),
             gelir_tarih_saat_satiri,
             gelir_kaynagi,
-            gelir_turu,
+            gelir_turu_satiri,
             gelir_aciklamasi,
             gelir_tutari
         ], spacing=10, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
@@ -1969,23 +2192,21 @@ def main(page: ft.Page):
         gider_urun = ft.TextField(label="Ürün / Hizmet (Örn: Süt, Ekmek, Elektrik)", width=320, dense=True)
         gider_kategori = make_dropdown(
             label="Kategori",
-            options=[
-                "Market & Temel Gıda",
-                "Ev & Faturalar",
-                "Ulaşım / Yakıt",
-                "Abur Cubur & Atıştırmalık",
-                "Giyim & Kişisel",
-                "Sağlık",
-                "Eğlence & Restoran",
-                "Eğitim & Okul",
-                "Sigara/Tütün",
-                "Temizlik",
-                "Transfer / Birikim",
-                "Diğer"
-            ],
+            options=kategoriler_oku(),
             value="Market & Temel Gıda",
-            width=320,
+            width=275,
             dense=True
+        )
+        kategori_ekle_btn = ft.IconButton(
+            icon=ft.Icons.ADD_CIRCLE_OUTLINE,
+            icon_color="#2563eb",
+            tooltip="Yeni Kategori Ekle",
+            on_click=yeni_kategori_dialog_ac
+        )
+        kategori_satiri = ft.Row(
+            [gider_kategori, kategori_ekle_btn],
+            alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER
         )
 
         gider_miktar = ft.TextField(label="Miktar", width=115, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
@@ -2132,7 +2353,7 @@ def main(page: ft.Page):
             gider_hesap_secimi,
             gider_firma,
             gider_urun,
-            gider_kategori,
+            kategori_satiri,
             miktar_birim_satiri,
             fiyat_satiri
         ], spacing=10, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
@@ -2180,9 +2401,11 @@ def main(page: ft.Page):
         kasa_baslik_metni = ft.Text("ELDEKİ TOPLAM PARA (KASA)", size=10, weight=ft.FontWeight.BOLD, color="#94a3b8")
         kasa_tutar_metni = ft.Text("0,00 TL", size=24, weight=ft.FontWeight.BOLD, color="white")
 
-        bu_ay_gelir_txt = ft.Text("+0,00 TL", size=12, weight=ft.FontWeight.BOLD, color="#10b981")
-        bu_ay_gider_txt = ft.Text("-0,00 TL", size=12, weight=ft.FontWeight.BOLD, color="#f87171")
-        bu_ay_fark_txt = ft.Text("0,00 TL", size=12, weight=ft.FontWeight.BOLD, color="#38bdf8")
+        # Kullanıcı İsteği: Gelir, Gider ve Aylık Net kutucuklarının yükseklikleri birebir eşit olsun
+        # ve tutarlar kutucuk içine estetik şekilde, taşmadan ortalı otursun.
+        bu_ay_gelir_txt = ft.Text("+0,00 TL", size=10.5, weight=ft.FontWeight.BOLD, color="#10b981", text_align=ft.TextAlign.CENTER)
+        bu_ay_gider_txt = ft.Text("-0,00 TL", size=10.5, weight=ft.FontWeight.BOLD, color="#f87171", text_align=ft.TextAlign.CENTER)
+        bu_ay_fark_txt = ft.Text("0,00 TL", size=10.5, weight=ft.FontWeight.BOLD, color="#38bdf8", text_align=ft.TextAlign.CENTER)
 
         uye_cuzdan_metni = ft.Text("", size=11, color="#cbd5e1")
 
@@ -2207,33 +2430,39 @@ def main(page: ft.Page):
                     content=ft.Row([
                         ft.Container(
                             content=ft.Column([
-                                ft.Text("Bu Ay Gelir", size=10, color="#94a3b8", weight=ft.FontWeight.W_500),
+                                ft.Text("Bu Ay Gelir", size=10, color="#94a3b8", weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
                                 bu_ay_gelir_txt
-                            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
                             bgcolor="#132338",
                             border_radius=10,
-                            padding=make_padding(8, 6),
-                            expand=1
+                            padding=make_padding(4, 4),
+                            expand=1,
+                            height=54,
+                            alignment=get_alignment_center()
                         ),
                         ft.Container(
                             content=ft.Column([
-                                ft.Text("Bu Ay Gider", size=10, color="#94a3b8", weight=ft.FontWeight.W_500),
+                                ft.Text("Bu Ay Gider", size=10, color="#94a3b8", weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
                                 bu_ay_gider_txt
-                            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
                             bgcolor="#271822",
                             border_radius=10,
-                            padding=make_padding(8, 6),
-                            expand=1
+                            padding=make_padding(4, 4),
+                            expand=1,
+                            height=54,
+                            alignment=get_alignment_center()
                         ),
                         ft.Container(
                             content=ft.Column([
-                                ft.Text("Aylık Net", size=10, color="#94a3b8", weight=ft.FontWeight.W_500),
+                                ft.Text("Aylık Net", size=10, color="#94a3b8", weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
                                 bu_ay_fark_txt
-                            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
                             bgcolor="#162235",
                             border_radius=10,
-                            padding=make_padding(8, 6),
-                            expand=1
+                            padding=make_padding(4, 4),
+                            expand=1,
+                            height=54,
+                            alignment=get_alignment_center()
                         ),
                     ], spacing=6),
                 ),
@@ -2311,36 +2540,7 @@ def main(page: ft.Page):
         # --- KATEGORİ FİLTRELEME ---
         secilen_kategori = ["Tüm Kategoriler"]
 
-        kategori_filtre_listesi = [
-            "Tüm Kategoriler",
-            "Market & Temel Gıda",
-            "Ev & Faturalar",
-            "Sağlık",
-            "Eğitim & Okul",
-            "Giyim",
-            "Sigara/Tütün",
-            "Temizlik",
-            "Abur Cubur & Atıştırmalık",
-            "Dışarıda Yemek / Eğlence",
-            "Ulaşım",
-            "Ulaşım / Spor & Hobi",
-            "Transfer / Birikim",
-            "Borç / Kredi Kartı",
-            "Maaş",
-            "Ödenek",
-            "Ek Ders",
-            "Yatırım",
-            "Yatırım / Altın",
-            "Aile / Harçlık",
-            "Aile / Yardımlaşma",
-            "Aile / Diğer Gelir",
-            "Devir / Nakit",
-            "Kişisel Bakım & Kozmetik",
-            "Evcil Hayvan (Pamuk)",
-            "Elektronik & Diğer",
-            "Yardım",
-            "Diğer"
-        ]
+        kategori_filtre_listesi = ["Tüm Kategoriler"] + kategoriler_oku() + gelir_turleri_oku()
 
         def kategori_filtre_degisti(e):
             secilen_kategori[0] = kategori_filtre_dropdown.value or "Tüm Kategoriler"
@@ -4351,9 +4551,13 @@ def main(page: ft.Page):
                 ]
             elif tur == "Gelir":
                 duzenle_kaynak = ft.TextField(label="Kaynak / Kurum", value=item.get("kaynak", ""), width=310, dense=True)
+                mevcut_gelir_turu = item.get("gelir_turu") or "Maaş"
+                gelir_secenekleri = list(gelir_turleri_oku())
+                if mevcut_gelir_turu and mevcut_gelir_turu not in gelir_secenekleri:
+                    gelir_secenekleri.insert(0, mevcut_gelir_turu)
                 duzenle_gelir_turu = make_dropdown(
-                    options=["Maaş", "Ek Gelir / Serbest", "Kira Geliri", "Yatırım / Faiz", "Diğer"],
-                    value=item.get("gelir_turu") or "Maaş",
+                    options=gelir_secenekleri,
+                    value=mevcut_gelir_turu,
                     label="Gelir Türü",
                     width=310,
                     dense=True
@@ -5118,24 +5322,77 @@ def main(page: ft.Page):
             width=355
         )
 
-        # Liste Araç Çubuğu (Kronolojik Sıralama, En Başa / En Sona Git ve Toplu Sil)
-        def siralama_toggle(e):
+        # Modern Sıralama Seçenekleri (Kullanıcı İsteği: Tıklayınca 'Yeniden Eskiye' ve 'Eskiden Yeniye' seçenekleri açılır)
+        def siralama_secenekleri_ac(e=None):
             dokunma_geribildirimi()
-            siralama_en_yeni[0] = not siralama_en_yeni[0]
-            set_button_label(siralama_btn, "⏱️ Yeni ➔ Eski" if siralama_en_yeni[0] else "⏱️ Eski ➔ Yeni")
-            bilgi_mesaji.value = "📅 Sıralama: Yeniden Eskiye (En Son İşlem Üstte)" if siralama_en_yeni[0] else "📅 Sıralama: Kronolojik (Eskiden Yeniye)"
-            bilgi_mesaji.color = "blue"
-            try:
-                bilgi_mesaji.update()
-            except Exception:
-                pass
-            arayuzu_guncelle()
+
+            def siralama_sec(en_yeni_mi):
+                siralama_en_yeni[0] = en_yeni_mi
+                set_button_label(siralama_btn, "⏱️ Yeniden Eskiye" if en_yeni_mi else "⏳ Eskiden Yeniye")
+                bilgi_mesaji.value = "📅 Sıralama: Yeniden Eskiye (En Son İşlem Üstte)" if en_yeni_mi else "📅 Sıralama: Kronolojik (Eskiden Yeniye)"
+                bilgi_mesaji.color = "#2563eb"
+                try:
+                    bilgi_mesaji.update()
+                except Exception:
+                    pass
+                close_app_dialog(page, siralama_dialog)
+                dokunma_geribildirimi()
+                arayuzu_guncelle()
+
+            siralama_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.SORT_ROUNDED, color="#2563eb", size=22),
+                    ft.Text("İşlem Sıralama Seçenekleri", size=16, weight=ft.FontWeight.BOLD)
+                ], spacing=8),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Text("İşlem geçmişi listeleme sırasını belirleyin:", size=11, color="#64748b"),
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.CHECK_CIRCLE_ROUNDED if siralama_en_yeni[0] else ft.Icons.RADIO_BUTTON_UNCHECKED,
+                                        color="#2563eb" if siralama_en_yeni[0] else "#94a3b8", size=20),
+                                ft.Column([
+                                    ft.Text("Yeniden Eskiye (En Yeni Üstte)", size=13, weight=ft.FontWeight.BOLD if siralama_en_yeni[0] else ft.FontWeight.NORMAL),
+                                    ft.Text("En son yapılan harcama veya gelir en başta listelenir", size=10, color="#64748b")
+                                ], spacing=1)
+                            ], spacing=10),
+                            bgcolor="#eff6ff" if siralama_en_yeni[0] else None,
+                            border=make_border_all(1, "#bfdbfe" if siralama_en_yeni[0] else "#e2e8f0"),
+                            border_radius=10,
+                            padding=make_padding(10, 8),
+                            on_click=lambda _: siralama_sec(True)
+                        ),
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.CHECK_CIRCLE_ROUNDED if not siralama_en_yeni[0] else ft.Icons.RADIO_BUTTON_UNCHECKED,
+                                        color="#2563eb" if not siralama_en_yeni[0] else "#94a3b8", size=20),
+                                ft.Column([
+                                    ft.Text("Eskiden Yeniye (Kronolojik)", size=13, weight=ft.FontWeight.BOLD if not siralama_en_yeni[0] else ft.FontWeight.NORMAL),
+                                    ft.Text("Ayın başından sonuna doğru tarih sırasıyla listelenir", size=10, color="#64748b")
+                                ], spacing=1)
+                            ], spacing=10),
+                            bgcolor="#eff6ff" if not siralama_en_yeni[0] else None,
+                            border=make_border_all(1, "#bfdbfe" if not siralama_en_yeni[0] else "#e2e8f0"),
+                            border_radius=10,
+                            padding=make_padding(10, 8),
+                            on_click=lambda _: siralama_sec(False)
+                        ),
+                    ], spacing=10, tight=True),
+                    width=310
+                ),
+                actions=[
+                    make_button("✕ Kapat", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, siralama_dialog))
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+            show_app_dialog(page, siralama_dialog)
 
         siralama_btn = make_button(
-            "⏱️ Yeni ➔ Eski" if siralama_en_yeni[0] else "⏱️ Eski ➔ Yeni",
-            height=30,
+            "⏱️ Yeniden Eskiye" if siralama_en_yeni[0] else "⏳ Eskiden Yeniye",
+            height=32,
             outlined=True,
-            on_click=siralama_toggle
+            tooltip="İşlem Sıralama Seçenekleri (Yeniden Eskiye / Eskiden Yeniye)",
+            on_click=siralama_secenekleri_ac
         )
         toplu_sil_btn = make_button("🗑️ Toplu Sil", height=30, bgcolor="#ef4444", color="white", tooltip="Listelenen Kayıtları Kalıcı Olarak Sil", on_click=toplu_silme_onayi_iste)
         yenile_btn = make_button("🔄 Yenile", height=30, bgcolor="#10b981", color="white", tooltip="Buluttaki Yeni Kayıtları Getir", on_click=verileri_buluttan_yenile)
@@ -5556,20 +5813,18 @@ def main(page: ft.Page):
 
             show_app_dialog(page, stat_dialog)
 
-        # Modern ve Sadeleştirilmiş Üst Başlık Barı
-        # Çıkış işlemi doğrudan profil çipine gömüldü; yenileme işlemi ise işlem geçmişinde mevcut.
-        # Böylece hiçbir taşma yaşanmaz, okul harçlığı ve istatistik butonları %100 sorunsuz çalışır.
+        # Kullanıcı İsteği: Ana ekranda hangi hesapta işlem yapıldığını görmek amacıyla sadece
+        # kullanıcı ismi rozeti yer alsın; hesap değiştirme ve çıkış işlemleri ise tek bir yerden
+        # (üç çizgi menüsünden) yapılsın.
         profil_cipi = ft.Container(
             content=ft.Row([
-                ft.Text(f"👑 {kullanici}" if yonetici_mi else f"👤 {kullanici}", size=11, color="#2563eb", weight=ft.FontWeight.BOLD),
-                ft.Icon(ft.Icons.ARROW_DROP_DOWN_ROUNDED, size=16, color="#2563eb")
+                ft.Text(f"👑 {kullanici}" if yonetici_mi else f"👤 {kullanici}", size=11, color="#1e40af", weight=ft.FontWeight.BOLD)
             ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             bgcolor="#eff6ff",
             border=make_border_all(1, "#bfdbfe"),
             border_radius=16,
             padding=make_padding(8, 4),
-            tooltip="Hesap Değiştir veya Çıkış Yap",
-            on_click=cikis_yap_aksiyon
+            tooltip=f"Aktif Hesap: {kullanici}"
         )
 
         # --- TEMA SEÇİM DİYALOĞU ---
@@ -5643,6 +5898,19 @@ def main(page: ft.Page):
                             title=ft.Text("Kayıtları CSV Olarak İndir", size=13, weight=ft.FontWeight.W_600),
                             subtitle=ft.Text("Tüm işlemleri CSV olarak kaydet", size=10, color="#64748b"),
                             on_click=lambda _: (close_app_dialog(page, menu_dialog), csv_indir_tiklandi())
+                        ),
+                        ft.Divider(height=6, color="#e2e8f0"),
+                        ft.ListTile(
+                            leading=ft.Icon(ft.Icons.CATEGORY_ROUNDED, color="#2563eb"),
+                            title=ft.Text("Yeni Kategori Ekle", size=13, weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text("Harcamalar için yeni kategori tanımla", size=10, color="#64748b"),
+                            on_click=lambda _: menu_aksiyon_calistir(yeni_kategori_dialog_ac)
+                        ),
+                        ft.ListTile(
+                            leading=ft.Icon(ft.Icons.SAVINGS_ROUNDED, color="#059669"),
+                            title=ft.Text("Yeni Gelir Türü Ekle", size=13, weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text("Gelirler için yeni tür tanımla", size=10, color="#64748b"),
+                            on_click=lambda _: menu_aksiyon_calistir(yeni_gelir_turu_dialog_ac)
                         ),
                         ft.Divider(height=6, color="#e2e8f0"),
                         ft.ListTile(
