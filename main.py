@@ -2528,14 +2528,11 @@ def main(page: ft.Page):
                 fis_analiz_tetikleyici[0](toplu_yollar)
 
     galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
-    if hasattr(page, "overlay") and galeri_picker not in page.overlay:
+    galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
+    if hasattr(page, "services"):
         try:
-            page.overlay.append(galeri_picker)
-        except Exception:
-            pass
-    if hasattr(page, "services") and galeri_picker not in page.services:
-        try:
-            page.services.append(galeri_picker)
+            if galeri_picker not in page.services:
+                page.services.append(galeri_picker)
         except Exception:
             pass
 
@@ -2615,7 +2612,7 @@ def main(page: ft.Page):
                 pass
             try:
                 if hasattr(page, "overlay") and not hasattr(page, "services") and _pk not in page.overlay:
-                    page.overlay.append(_pk)
+                    pass
             except Exception:
                 pass
 
@@ -5008,8 +5005,6 @@ def main(page: ft.Page):
 
                 # Mobilde hazır galeri_picker servisini çoklu seçimle tetikle
                 try:
-                    if hasattr(page, "overlay") and galeri_picker not in page.overlay:
-                        page.overlay.append(galeri_picker)
                     galeri_picker.pick_files(
                         dialog_title="Fiş Fotoğraflarını Seçin",
                         file_type=ft.FilePickerFileType.IMAGE,
