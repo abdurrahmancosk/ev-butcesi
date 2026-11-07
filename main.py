@@ -2543,28 +2543,13 @@ def main(page: ft.Page):
             print("Picker sonucu işleme hatası:", ex_pk_res)
 
     galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
-    # CSV Analizi İşlemci Referansı ve Global CSV Seçici Servisi
-    csv_islemci_tetikleyici = [None]
-
-    def on_csv_secimi_tamamlandi(e):
-        if hasattr(e, "files") and e.files and len(e.files) > 0:
-            f = e.files[0]
-            secilen_yol = getattr(f, "path", None)
-            ham_metin = None
-            if hasattr(f, "bytes") and f.bytes:
-                for enc in ["utf-8-sig", "utf-8", "cp1254", "latin1"]:
-                    try:
-                        ham_metin = f.bytes.decode(enc)
-                        break
-                    except Exception:
-                        pass
-                if not ham_metin and f.bytes:
-                    ham_metin = f.bytes.decode("latin1", errors="ignore")
-            if (secilen_yol and os.path.exists(str(secilen_yol))) or ham_metin:
-                if csv_islemci_tetikleyici[0]:
-                    csv_islemci_tetikleyici[0](dosya_yolu=secilen_yol, ham_metin=ham_metin)
-
     csv_picker = ft.FilePicker(on_result=on_csv_secimi_tamamlandi)
+    # FilePicker'ları sayfa servislerine ekle
+    if hasattr(page, "services"):
+        try:
+            page.services.extend([galeri_picker, csv_picker])
+        except Exception:
+            pass
 
     page.title = "Hane Bütçesi Takip Sistemi"
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
@@ -2608,6 +2593,9 @@ def main(page: ft.Page):
         # FilePicker'ların overlay içinde olduğunu teyit et
         # FilePicker overlay kaldırıldı (Kırmızı hata kesin olarak önlendi)
 
+        # FilePicker nesnelerini sayfa hiyerarşisine görünmez olarak ekle (Android'de garantili tetikleme sağlar ve kırmızı hata vermez)
+        picker_tutucu = ft.Container(content=ft.Row([galeri_picker, csv_picker], visible=False), visible=False)
+        page.add(picker_tutucu)
         aktif_tema_modu = tema_oku()
         if aktif_tema_modu == "light":
             page.theme_mode = ft.ThemeMode.LIGHT
@@ -5017,19 +5005,14 @@ def main(page: ft.Page):
                     except Exception as ex_tk:
                         pass
 
-                # Mobilde standart Flet FilePicker çağrısı
+                # Mobilde garantili FilePicker tetikleme
                 try:
                     galeri_picker.pick_files(
-                        dialog_title="Fiş Fotoğraflarını Seçin",
-                        file_type=ft.FilePickerFileType.IMAGE,
+                        dialog_title="Fiş Fotoğrafı Seçin",
                         allow_multiple=True
                     )
                 except Exception as ex_p:
-                    # Geri dönüş olarak her türlü dosyaya izin ver
-                    try:
-                        galeri_picker.pick_files(allow_multiple=True)
-                    except Exception:
-                        pass
+                    print("Galeri seçici tetikleme hatası:", ex_p)
 
             def metin_coz_tetikle(ev):
                 raw = metin_alani.value.strip()
@@ -5117,47 +5100,6 @@ def main(page: ft.Page):
                     )
 
             son_fotolari_ciz()
-
-            kamera_durum_kutusu = ft.Container(
-                visible=False,
-                bgcolor="#ecfdf5",
-                border=make_border_all(1.5, "#10b981"),
-                border_radius=8,
-                padding=make_padding(10, 8),
-                content=ft.Column([
-                    ft.Row([
-                        ft.Icon(ft.Icons.CAMERA_ALT_ROUNDED, color="#059669", size=20),
-                        ft.Text(
-                            "📸 Canlı Kamera İzleyici Aktif!",
-                            size=12,
-                            weight=ft.FontWeight.BOLD,
-                            color="#065f46",
-                            expand=True
-                        )
-                    ], spacing=6),
-                    ft.Text(
-                        "Telefonunuzun kamerasıyla fişin fotoğrafını çektiğiniz anda otomatik algılanıp okunacaktır.",
-                        size=10.5,
-                        color="#047857"
-                    )
-                ], spacing=4)
-            )
-
-            # A. XIAOMI REDMI NOTE 9 PRO & REDMI 14C İÇİN ÖZEL KAMERA BAŞLATICI
-            def redmi_kamera_ac_ve_izle(ev=None):
-                dokunma_geribildirimi()
-                close_app_dialog(page, fis_dialog)
-                show_app_snackbar(page, "📸 Kamera açılıyor...", color="#10b981")
-
-                try:
-                    if hasattr(page, "services") and galeri_picker not in page.services:
-                        page.services.append(galeri_picker)
-                    galeri_picker.pick_files(
-                        dialog_title="Fiş Fotoğrafı Çek veya Seç",
-                        allow_multiple=False
-                    )
-                except Exception as ex_cam_pk:
-                    print("Kamera pick_files hatası:", ex_cam_pk)
 
             dialog_icerik = [
                 make_button(
