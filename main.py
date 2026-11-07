@@ -4543,7 +4543,11 @@ def main(page: ft.Page):
                     close_app_dialog(page, yukleniyor_dialog)
 
                     if not tum_sonuclar:
-                        show_app_snackbar(page, "⚠️ Taranan fişlerden geçerli harcama verisi çıkarılamadı.", color="#ef4444")
+                        show_app_snackbar(
+                            page,
+                            "⚠️ Fiş okunamadı. Lütfen Gemini API anahtarınızı Fiş Tara ekranındaki anahtar alanına girdiğinizden emin olun.",
+                            color="#ef4444"
+                        )
                         return
 
                     # --- MÜKERRER KONTROLÜ VE ÖZET DERLEME ---
@@ -6973,7 +6977,7 @@ def main(page: ft.Page):
                         toplam_tutar_val = 0.0
 
                 if toplam_tutar_val <= 0 and not firma_val and not urun_val:
-                    bilgi_mesaji.value = "⚠️ Hiçbir veri girmediniz! Lütfen harcama tutarı ve ürün/firma giriniz."
+                    bilgi_mesaji.value = "⚠️ Lütfen geçerli bir harcama tutarı giriniz (0'dan büyük olmalı)!"
                     bilgi_mesaji.color = "red"
                     page.update()
                     return
@@ -6983,6 +6987,16 @@ def main(page: ft.Page):
                     bilgi_mesaji.color = "red"
                     page.update()
                     return
+
+                # Kullanıcı İsteği: Sadece tutar yazıp kaydetme kolaylığı!
+                # Firma veya ürün boş bırakılırsa bulut veritabanının reddetmemesi için varsayılan atanır.
+                if not firma_val and not urun_val:
+                    firma_val = "Nakit Harcama"
+                    urun_val = "Muhtelif Harcama"
+                elif not firma_val:
+                    firma_val = urun_val
+                elif not urun_val:
+                    urun_val = firma_val
 
                 if miktar_str and not birim_val:
                     bilgi_mesaji.value = f"⚠️ Miktar ({miktar_str}) belirlendiği için lütfen birim seçiniz!"
