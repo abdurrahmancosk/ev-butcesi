@@ -115,8 +115,16 @@ def urun_olcu_ve_miktar_cikar(urun, miktar_str=""):
 
     return (None, None)
 
+_TOKEN_CACHE = {}
+_OLCU_CACHE = {}
+_FIYAT_KARS_CACHE = {}
+
 def tokenize_urun_adi(s):
-    """Ürün adını temizler ve gereksiz ambalaj/market marka kelimelerini arındırır."""
+    """Ürün adını temizler ve gereksiz ambalaj/market marka kelimelerini arındırır (Önbellekli)."""
+    if not s:
+        return []
+    if s in _TOKEN_CACHE:
+        return _TOKEN_CACHE[s]
     s_clean = tr_lower(s)
     s_clean = re.sub(r'[\(\)\[\]\{\}\-\.,/]', ' ', s_clean)
     ign = {
@@ -125,6 +133,7 @@ def tokenize_urun_adi(s):
         "carrefour", "yöremce", "yoremce", "binvezir", "dost", "daphne"
     }
     words = [w for w in s_clean.split() if w not in ign]
+    _TOKEN_CACHE[s] = words
     return words
 
 def urun_benzerlik_orani(u1, u2):
@@ -202,6 +211,11 @@ def urun_gecmis_fiyat_karsilastir(urun, suanki_fiyat, suanki_firma="", suanki_mi
     if suanki_f <= 0:
         return None
 
+    kaynak_len = len(islemler_listesi) if islemler_listesi is not None else 0
+    cache_key = (str(urun), round(suanki_f, 2), str(suanki_firma), str(suanki_miktar), str(suanki_kategori), str(haric_id), kaynak_len)
+    if cache_key in _FIYAT_KARS_CACHE:
+        return _FIYAT_KARS_CACHE[cache_key]
+
     if karsilastirma_engelli_mi(urun, suanki_firma, suanki_kategori):
         return None
 
@@ -239,11 +253,13 @@ def urun_gecmis_fiyat_karsilastir(urun, suanki_fiyat, suanki_firma="", suanki_mi
             break
 
     if not en_yakin_kayit:
+        _FIYAT_KARS_CACHE[cache_key] = None
         return None
 
     onceki_f = en_yakin_kayit["onceki_fiyat"]
     # Fiyat aynı ise KESİNLİKLE bilgilendirme yapılmaz (Kullanıcı kesin kuralı)
     if abs(suanki_f - onceki_f) < 0.05:
+        _FIYAT_KARS_CACHE[cache_key] = None
         return None
 
     fark = abs(suanki_f - onceki_f)
@@ -268,7 +284,7 @@ def urun_gecmis_fiyat_karsilastir(urun, suanki_fiyat, suanki_firma="", suanki_mi
             metin = f"🔴 {fark:,.2f} TL (%{yuzde:.0f}) daha pahalı ({onceki_fir}'e göre)"
             mesaj = f"Bu ürün daha önce {onceki_fir}'de {onceki_f:,.2f} TL idi. Burada {fark:,.2f} TL (%{yuzde:.0f}) daha pahalı!"
 
-    return {
+    sonuc_dict = {
         "durum": durum,
         "fark": fark,
         "yuzde": yuzde,
@@ -277,6 +293,8 @@ def urun_gecmis_fiyat_karsilastir(urun, suanki_fiyat, suanki_firma="", suanki_mi
         "onceki_fiyat": onceki_f,
         "onceki_firma": onceki_fir
     }
+    _FIYAT_KARS_CACHE[cache_key] = sonuc_dict
+    return sonuc_dict
 
 # ==============================================================================
 # Flet 1.0+ ve Eski Sürümler İçin Evrensel Uyumluluk Katmanı
@@ -1198,6 +1216,32 @@ BILDIRIMLER_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BA
 BILDIRIM_AYARLARI_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "bildirim_ayarlari.json")
 MARKET_ESLEMELERI_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "market_eslemeleri.json")
 URUN_KATEGORI_ESLEMELERI_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "urun_kategori_eslemeleri.json")
+ISLEMLER_CACHE_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "islemler_cache.json")
+
+def islemler_yerel_cache_oku():
+    """Uygulama açılır açılmaz verilerin 0 saniyede ekrana gelmesi için yerel önbelleği okur."""
+    if os.path.exists(ISLEMLER_CACHE_DOSYASI):
+        try:
+            with open(ISLEMLER_CACHE_DOSYASI, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            pass
+    return []
+
+def islemler_yerel_cache_kaydet(liste):
+    """İşlemler listesini arka planda yerel önbelleğe yazar."""
+    def _kaydet():
+        try:
+            with open(ISLEMLER_CACHE_DOSYASI, "w", encoding="utf-8") as f:
+                json.dump(liste, f, ensure_ascii=False)
+        except Exception:
+            pass
+    try:
+        threading.Thread(target=_kaydet, daemon=True).start()
+    except Exception:
+        pass
 
 def urun_kategori_eslemeleri_oku():
     if os.path.exists(URUN_KATEGORI_ESLEMELERI_DOSYASI):
@@ -2469,6 +2513,18 @@ def main(page: ft.Page):
     def ana_ekrana_git(kullanici, yonetici_mi):
         page.clean()
         page.scroll = ft.ScrollMode.AUTO
+        # page.clean() sonrası FilePicker servislerini yeniden bağla (Kamera & Galeri seçicinin her zaman tepki vermesi için)
+        for _pk in (galeri_picker, csv_picker):
+            try:
+                if hasattr(page, "services") and _pk not in page.services:
+                    page.services.append(_pk)
+            except Exception:
+                pass
+            try:
+                if hasattr(page, "overlay") and not hasattr(page, "services") and _pk not in page.overlay:
+                    page.overlay.append(_pk)
+            except Exception:
+                pass
 
         # Masaüstü ve tarayıcı için Flet Audio player hazırlığı
         if _ses_dosyasi_yolu and os.path.exists(_ses_dosyasi_yolu) and hasattr(ft, "Audio"):
@@ -2499,41 +2555,37 @@ def main(page: ft.Page):
         tum_zamanlar_modu = [False]
         siralama_en_yeni = [True]  # Varsayılan: Yeniden Eskiye (En yeni harcama üstte)
 
-        # Buluttan mevcut kayıtları çek (ve dönemi en güncel veriye otomatik ayarla)
-        if supabase:
+        # 1. ÖNCE YEREL ÖNBELLEKTEN ANINDA YÜKLE (0 Saniye Gecikme - Uygulama açılır açılmaz veriler ekranda!)
+        if not islemler:
+            yerel_veriler = islemler_yerel_cache_oku()
+            if yerel_veriler:
+                islemler.extend(yerel_veriler)
+
+        if islemler:
             try:
-                res = supabase.table("islemler").select("*").order("id", desc=True).limit(2000).execute()
-                if res.data is not None:
-                    islemler.clear()
-                    islemler.extend(res.data)
-                    # Market isimlerini ve %100 aynı ürün kategorilerini otomatik normalize et
-                    try:
-                        u_map = urun_kategori_eslemeleri_oku()
-                        for it in islemler:
-                            if it.get("tur") == "Gider":
-                                if it.get("firma"):
-                                    duz = market_adi_duzelt(it["firma"])
-                                    if duz != it["firma"]:
-                                        it["firma"] = duz
-                                if u_map and it.get("urun"):
-                                    u_n = tr_normalize_key(it["urun"])
-                                    if u_n in u_map and it.get("kategori") != u_map[u_n]:
-                                        it["kategori"] = u_map[u_n]
-                    except Exception:
-                        pass
-                    # Eğer veri geldiyse ve mevcut bütçe döneminde kayıt yoksa, dönemi en güncel verinin ayına taşı
-                    en_yeni_tarih = None
-                    for it in islemler:
-                        dt = stringden_tarih_al(it.get("tarih"))
-                        if dt:
-                            if not en_yeni_tarih or dt > en_yeni_tarih:
-                                en_yeni_tarih = dt
-                    if en_yeni_tarih:
-                        p_bas, p_bit = aktif_butce_donemini_bul(en_yeni_tarih)
-                        secilen_donem_bas[0] = p_bas
-                        secilen_donem_bit[0] = p_bit
-            except Exception as ex:
-                print("Buluttan veri çekme hatası:", ex)
+                u_map = urun_kategori_eslemeleri_oku()
+                for it in islemler:
+                    if it.get("tur") == "Gider":
+                        if it.get("firma"):
+                            duz = market_adi_duzelt(it["firma"])
+                            if duz != it["firma"]:
+                                it["firma"] = duz
+                        if u_map and it.get("urun"):
+                            u_n = tr_normalize_key(it["urun"])
+                            if u_n in u_map and it.get("kategori") != u_map[u_n]:
+                                it["kategori"] = u_map[u_n]
+            except Exception:
+                pass
+
+            en_yeni_tarih = None
+            for it in islemler:
+                dt = stringden_tarih_al(it.get("tarih"))
+                if dt and (not en_yeni_tarih or dt > en_yeni_tarih):
+                    en_yeni_tarih = dt
+            if en_yeni_tarih:
+                p_bas, p_bit = aktif_butce_donemini_bul(en_yeni_tarih)
+                secilen_donem_bas[0] = p_bas
+                secilen_donem_bit[0] = p_bit
 
         # Tarih ve saat durum değişkenleri
         secilen_gelir_tarih = [datetime.date.today()]
@@ -4692,89 +4744,41 @@ def main(page: ft.Page):
 
             son_fotolari_ciz()
 
+            kamera_durum_kutusu = ft.Container(
+                visible=False,
+                bgcolor="#ecfdf5",
+                border=make_border_all(1.5, "#10b981"),
+                border_radius=8,
+                padding=make_padding(10, 8),
+                content=ft.Row([
+                    ft.Icon(ft.Icons.CAMERA_ALT_ROUNDED, color="#059669", size=20),
+                    ft.Text(
+                        "📸 Kamera & Fiş İzleyici Aktif! Fişi çektiğiniz an otomatik okunacaktır...",
+                        size=11,
+                        weight=ft.FontWeight.BOLD,
+                        color="#065f46",
+                        expand=True
+                    )
+                ], spacing=8)
+            )
+
             def kamera_ac_ve_cekim_bekle(ev=None):
                 dokunma_geribildirimi()
                 baslangic_zamani = time.time()
-                onceki_en_yeni_yol = son_fotolar[0]["yol"] if son_fotolar else None
+                guncel_ilk = son_gorselleri_bul(limit=1)
+                onceki_en_yeni_yol = guncel_ilk[0]["yol"] if guncel_ilk else None
 
-                # 1. Android yerel Kamera uygulamasını başlatmayı dene (pyjnius / Intent veya am start)
-                kamera_baslatildi = False
-                if platform_mobil_mi():
-                    try:
-                        from jnius import autoclass
-                        PythonActivity = autoclass('org.kivy.android.PythonActivity')
-                        Intent = autoclass('android.content.Intent')
-                        act = PythonActivity.mActivity
-                        # Doğrudan tam ekran kamera uygulamasını açan standart Android intenti
-                        cam_intent = Intent("android.media.action.STILL_IMAGE_CAMERA")
-                        cam_intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        act.startActivity(cam_intent)
-                        kamera_baslatildi = True
-                    except Exception:
-                        try:
-                            from jnius import autoclass
-                            PythonActivity = autoclass('org.kivy.android.PythonActivity')
-                            Intent = autoclass('android.content.Intent')
-                            MediaStore = autoclass('android.provider.MediaStore')
-                            act = PythonActivity.mActivity
-                            cam_intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-                            act.startActivity(cam_intent)
-                            kamera_baslatildi = True
-                        except Exception:
-                            pass
+                # 1. Diyalog içinde anında görsel geri bildirim göster
+                kamera_durum_kutusu.visible = True
+                try:
+                    kamera_durum_kutusu.update()
+                    page.update()
+                except Exception:
+                    pass
 
-                    if not kamera_baslatildi:
-                        try:
-                            import subprocess
-                            subprocess.Popen(["am", "start", "-a", "android.media.action.STILL_IMAGE_CAMERA"])
-                            kamera_baslatildi = True
-                        except Exception:
-                            pass
-
-                # 2. Ayrıca Android/Mobil görsel seçiciyi (Kamera seçeneği destekli) tetikle
-                if not kamera_baslatildi:
-                    try:
-                        f_type = getattr(ft.FilePickerFileType, "IMAGE", None) if hasattr(ft, "FilePickerFileType") else None
-                        kwargs = {
-                            "dialog_title": "Kamerayla Çek veya Fotoğraf Seç",
-                            "allow_multiple": False,
-                            "with_data": True
-                        }
-                        if f_type is not None:
-                            kwargs["file_type"] = f_type
-                        res = galeri_picker.pick_files(**kwargs)
-                        if asyncio.iscoroutine(res):
-                            async def _await_cam_picker():
-                                try:
-                                    files = await res
-                                    if files and len(files) > 0:
-                                        f = files[0]
-                                        p = getattr(f, "path", None)
-                                        if not p and hasattr(f, "bytes") and f.bytes:
-                                            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                                                tf.write(f.bytes)
-                                                p = tf.name
-                                        if p and os.path.exists(str(p)):
-                                            close_app_dialog(page, fis_dialog)
-                                            fis_gorselini_tara_ve_goster(str(p))
-                                except Exception as ex_c:
-                                    print("Kamera seçici hatası:", ex_c)
-                            if hasattr(page, "run_task"):
-                                page.run_task(_await_cam_picker)
-                            else:
-                                threading.Thread(target=lambda: asyncio.run(_await_cam_picker()), daemon=True).start()
-                    except Exception as ex_p:
-                        print("Kamera FilePicker yedek hatası:", ex_p)
-
-                show_app_snackbar(
-                    page,
-                    "📷 Kamera açılıyor... Fişin fotoğrafını çektiğinizde otomatik algılanıp taranacaktır!",
-                    color="#10b981"
-                )
-
-                # 3. Arka planda DCIM/Camera klasörünü 90 saniye boyunca izle: yeni fotoğraf çekildiği an otomatik tara!
+                # 2. Arka planda DCIM/Camera klasörünü 120 saniye boyunca izle: yeni fotoğraf çekildiği an otomatik tara!
                 def _yeni_cekilen_fisi_izle():
-                    for _ in range(90):
+                    for _ in range(120):
                         time.sleep(1.0)
                         try:
                             guncel = son_gorselleri_bul(limit=1)
@@ -4785,8 +4789,7 @@ def main(page: ft.Page):
                                     mtime = os.path.getmtime(y_yol)
                                 except Exception:
                                     mtime = 0
-                                if y_yol != onceki_en_yeni_yol and mtime >= (baslangic_zamani - 2.0):
-                                    # Dosyanın diske yazılmasının tamamlanması için kısa bekleme
+                                if y_yol != onceki_en_yeni_yol and mtime >= (baslangic_zamani - 3.0):
                                     time.sleep(0.8)
                                     close_app_dialog(page, fis_dialog)
                                     show_app_snackbar(page, f"📸 Yeni çekilen fiş algılandı ({en_yeni['ad']}), analiz ediliyor...", color="#10b981")
@@ -4797,9 +4800,97 @@ def main(page: ft.Page):
 
                 threading.Thread(target=_yeni_cekilen_fisi_izle, daemon=True).start()
 
+                # 3. Android'de veya Bilgisayarda Kamera / Görsel Seçiciyi Aç
+                # Flet'te AlertDialog açıkken sistem seçicisinin üstte açılabilmesi için önce diyaloğu kapatıyoruz
+                close_app_dialog(page, fis_dialog)
+                show_app_snackbar(
+                    page,
+                    "📷 Kamera / Fiş Seçici açılıyor... Fişin fotoğrafını çekin veya seçin!",
+                    color="#10b981"
+                )
+
+                # Masaüstünde (Windows/Mac) ise doğrudan dosya seçici penceresini aç
+                if not platform_mobil_mi():
+                    try:
+                        import tkinter as tk
+                        from tkinter import filedialog
+                        root = tk.Tk()
+                        root.withdraw()
+                        root.attributes("-topmost", True)
+                        dy_list = filedialog.askopenfilenames(
+                            title="Fiş Fotoğrafı Seçin",
+                            filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
+                        )
+                        root.destroy()
+                        if dy_list:
+                            gecerli_yollar = [y for y in dy_list if os.path.exists(y)]
+                            if gecerli_yollar:
+                                fis_gorselini_tara_ve_goster(gecerli_yollar)
+                                return
+                    except Exception as ex_tk:
+                        print("Masaüstü kamera/dosya seçici uyarısı:", ex_tk)
+
+                # Android / Mobil cihazda:
+                # Yöntem A: Android yerel Kamera uygulamasını doğrudan açmayı dene
+                kamera_dogrudan_acildi = False
+                if platform_mobil_mi():
+                    try:
+                        from jnius import autoclass
+                        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+                        Intent = autoclass('android.content.Intent')
+                        act = PythonActivity.mActivity
+                        cam_intent = Intent('android.media.action.STILL_IMAGE_CAMERA')
+                        cam_intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        act.startActivity(cam_intent)
+                        kamera_dogrudan_acildi = True
+                    except Exception:
+                        pass
+
+                    if not kamera_dogrudan_acildi:
+                        try:
+                            import subprocess
+                            ret = subprocess.call(['am', 'start', '-a', 'android.media.action.STILL_IMAGE_CAMERA'])
+                            if ret == 0:
+                                kamera_dogrudan_acildi = True
+                        except Exception:
+                            pass
+
+                # Yöntem B: Flet FilePicker servisini (Android'de Kamera + Galeri seçiciyi açar) tetikle
+                try:
+                    res = galeri_picker.pick_files(
+                        dialog_title="Kamerayla Fiş Çek veya Seç",
+                        allow_multiple=True,
+                        with_data=True
+                    )
+                    if asyncio.iscoroutine(res):
+                        async def _await_cam_picker():
+                            try:
+                                files = await res
+                                if files and len(files) > 0:
+                                    yollar = []
+                                    for f in files:
+                                        p = getattr(f, "path", None)
+                                        if not p and hasattr(f, "bytes") and f.bytes:
+                                            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
+                                                tf.write(f.bytes)
+                                                p = tf.name
+                                        if p and os.path.exists(str(p)):
+                                            yollar.append(str(p))
+                                    if yollar:
+                                        fis_gorselini_tara_ve_goster(yollar)
+                            except Exception as ex_c:
+                                print("Kamera seçici coroutine hatası:", ex_c)
+                        if hasattr(page, "run_task"):
+                            page.run_task(_await_cam_picker)
+                        else:
+                            threading.Thread(target=lambda: asyncio.run(_await_cam_picker()), daemon=True).start()
+                except Exception as ex_p:
+                    show_app_snackbar(page, f"Kamera seçici uyarısı: {ex_p}", color="#ef4444")
+
             dialog_icerik = [
+                kamera_durum_kutusu,
                 make_button(
-                    "📷 Kamerayı Aç & Fiş Çek (Otomatik Algılar)",
+                    "📷 Kamerayla Fiş Çek / Seç (Otomatik Algılar)",
                     icon=ft.Icons.PHOTO_CAMERA_ROUNDED,
                     bgcolor="#10b981",
                     color="white",
@@ -4807,7 +4898,7 @@ def main(page: ft.Page):
                     on_click=kamera_ac_ve_cekim_bekle
                 ),
                 make_button(
-                    "📁 Galeriden Fiş Seç (Tekli veya Çoklu Seçim)",
+                    "📁 Galeriden Çoklu Fiş Seç",
                     icon=ft.Icons.PHOTO_LIBRARY,
                     bgcolor="#2563eb",
                     color="white",
@@ -5821,6 +5912,8 @@ def main(page: ft.Page):
 
         # --- ARAYÜZ VE BAKİYE HESAPLAMA ---
         def arayuzu_guncelle():
+            if islemler:
+                islemler_yerel_cache_kaydet(islemler)
             liste_arayuzu.controls.clear()
             liste_arayuzu.controls.append(ft.Container(key="liste_basi", height=0))
 
@@ -6651,6 +6744,7 @@ def main(page: ft.Page):
                         onceki_adet = len(islemler)
                         islemler.clear()
                         islemler.extend(res.data)
+                        islemler_yerel_cache_kaydet(islemler)
                     # Market isimlerini ve %100 aynı ürün kategorilerini otomatik normalize et
                     try:
                         u_map = urun_kategori_eslemeleri_oku()
@@ -8742,13 +8836,59 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                 except Exception as ex_tara:
                     pass
 
-        threading.Thread(target=arka_plan_bildirim_tara, daemon=True).start()
+        # Açılışta arka planda buluttan güncel kayıtları çek ve otomatik harçlığı kontrol et (Arayüzü asla bekletmez!)
+        def _acilis_bulut_senkronizasyonu():
+            try:
+                if supabase:
+                    res = supabase.table("islemler").select("*").order("id", desc=True).limit(2000).execute()
+                    if res and res.data is not None:
+                        islemler.clear()
+                        islemler.extend(res.data)
+                        try:
+                            u_map = urun_kategori_eslemeleri_oku()
+                            for it in islemler:
+                                if it.get("tur") == "Gider":
+                                    if it.get("firma"):
+                                        duz = market_adi_duzelt(it["firma"])
+                                        if duz != it["firma"]:
+                                            it["firma"] = duz
+                                    if u_map and it.get("urun"):
+                                        u_n = tr_normalize_key(it["urun"])
+                                        if u_n in u_map and it.get("kategori") != u_map[u_n]:
+                                            it["kategori"] = u_map[u_n]
+                        except Exception:
+                            pass
 
-        # Uygulama açılışında okulların açık olduğu günleri otomatik kontrol et ve harçlık ekle
-        try:
-            otomatik_harclik_tara_ve_ekle(sessiz=True)
-        except Exception as ex_h_start:
-            print("Açılış otomatik harçlık kontrol hatası:", ex_h_start)
+                        islemler_yerel_cache_kaydet(islemler)
+
+                        for it in islemler:
+                            if it.get("id"):
+                                bilinen_islem_idler.add(str(it.get("id")))
+
+                        en_yeni_tarih = None
+                        for it in islemler:
+                            dt = stringden_tarih_al(it.get("tarih"))
+                            if dt and (not en_yeni_tarih or dt > en_yeni_tarih):
+                                en_yeni_tarih = dt
+                        if en_yeni_tarih:
+                            p_bas, p_bit = aktif_butce_donemini_bul(en_yeni_tarih)
+                            secilen_donem_bas[0] = p_bas
+                            secilen_donem_bit[0] = p_bit
+
+                        arayuzu_guncelle()
+            except Exception as ex_sync:
+                print("Açılış arka plan bulut çekme hatası:", ex_sync)
+
+            # Okulların açık olduğu günleri arka planda kontrol et ve harçlık ekle
+            try:
+                eklenen_h = otomatik_harclik_tara_ve_ekle(sessiz=True)
+                if eklenen_h and eklenen_h > 0:
+                    islemler_yerel_cache_kaydet(islemler)
+            except Exception as ex_h_start:
+                print("Açılış otomatik harçlık kontrol hatası:", ex_h_start)
+
+        threading.Thread(target=_acilis_bulut_senkronizasyonu, daemon=True).start()
+        threading.Thread(target=arka_plan_bildirim_tara, daemon=True).start()
 
     def giris_ekranina_git():
         if hasattr(page, "scroll_to"):
