@@ -2019,7 +2019,7 @@ JSON yapısı:
       "miktar": "Miktar (örn: 1 Adet, 1.5 kg, 2 Paket)",
       "birim_fiyat": 25.50,
       "tutar": 51.00,
-      "kategori": "Aşağıdaki mevcut bütçe kategorilerinden en uygununu seç: " + ", ".join(f"'{k}'" for k in kategoriler_oku()) + ",
+      "kategori": "Aşağıdaki mevcut bütçe kategorilerinden en uygununu seç: Market & Temel Gıda, Temizlik, Abur Cubur & Atıştırmalık, Poşet, Sigara/Tütün, Ev & Faturalar, Ulaşım / Yakıt, Dışarıda Yemek / Eğlence, Sağlık, Eğitim & Okul, Giyim & Ayakkabı, Diğer",
       "oneri_kategori": "Eğer mevcut kategorilerden hiçbiri bu ürüne uymuyorsa, bu ürün için önerdiğin yeni kategori adı (örn: Kırtasiye, Oto Bakım, Bahçe vb.), aksi halde boş bırak"
     }
   ],
@@ -2528,7 +2528,12 @@ def main(page: ft.Page):
                 fis_analiz_tetikleyici[0](toplu_yollar)
 
     galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
-    if hasattr(page, "services"):
+    if hasattr(page, "overlay") and galeri_picker not in page.overlay:
+        try:
+            page.overlay.append(galeri_picker)
+        except Exception:
+            pass
+    if hasattr(page, "services") and galeri_picker not in page.services:
         try:
             page.services.append(galeri_picker)
         except Exception:
@@ -5003,36 +5008,15 @@ def main(page: ft.Page):
 
                 # Mobilde hazır galeri_picker servisini çoklu seçimle tetikle
                 try:
-                    res = galeri_picker.pick_files(
-                        dialog_title="Fişleri Seçin (Çoklu Seçim Destekli)",
-                        allow_multiple=True,
-                        with_data=True
+                    if hasattr(page, "overlay") and galeri_picker not in page.overlay:
+                        page.overlay.append(galeri_picker)
+                    galeri_picker.pick_files(
+                        dialog_title="Fiş Fotoğraflarını Seçin",
+                        file_type=ft.FilePickerFileType.IMAGE,
+                        allow_multiple=True
                     )
-                    if asyncio.iscoroutine(res):
-                        async def _await_picker_coro():
-                            try:
-                                files = await res
-                                if files and len(files) > 0:
-                                    yollar = []
-                                    for f in files:
-                                        p = getattr(f, "path", None)
-                                        if not p and hasattr(f, "bytes") and f.bytes:
-                                            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                                                tf.write(f.bytes)
-                                                p = tf.name
-                                        if p and os.path.exists(str(p)):
-                                            yollar.append(str(p))
-                                    if yollar:
-                                        fis_gorselini_tara_ve_goster(yollar)
-                            except Exception as ex_coro:
-                                print("Await picker hatası:", ex_coro)
-
-                        if hasattr(page, "run_task"):
-                            page.run_task(_await_picker_coro)
-                        else:
-                            threading.Thread(target=lambda: asyncio.run(_await_picker_coro()), daemon=True).start()
-                except Exception as ex_pick:
-                    show_app_snackbar(page, f"Seçici hatası: {ex_pick}", color="#ef4444")
+                except Exception as ex_pk_call:
+                    print("pick_files hata:", ex_pk_call)
 
             def metin_coz_tetikle(ev):
                 raw = metin_alani.value.strip()
