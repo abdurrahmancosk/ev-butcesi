@@ -14,6 +14,14 @@ import types
 import urllib.parse
 import urllib.request
 import flet as ft
+try:
+    import flet_camera as fc
+except Exception:
+    fc = None
+try:
+    import flet_permission_handler as fph
+except Exception:
+    fph = None
 
 # ==============================================================================
 # Akıllı Fiyat Karşılaştırma & Bilgilendirme Motoru (%90 Benzerlik & Miktar Eşleşmesi Kuralı)
@@ -4750,35 +4758,39 @@ def main(page: ft.Page):
                 border=make_border_all(1.5, "#10b981"),
                 border_radius=8,
                 padding=make_padding(10, 8),
-                content=ft.Row([
-                    ft.Icon(ft.Icons.CAMERA_ALT_ROUNDED, color="#059669", size=20),
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon(ft.Icons.CAMERA_ALT_ROUNDED, color="#059669", size=20),
+                        ft.Text(
+                            "📸 Canlı Kamera İzleyici Aktif!",
+                            size=12,
+                            weight=ft.FontWeight.BOLD,
+                            color="#065f46",
+                            expand=True
+                        )
+                    ], spacing=6),
                     ft.Text(
-                        "📸 Kamera & Fiş İzleyici Aktif! Fişi çektiğiniz an otomatik okunacaktır...",
-                        size=11,
-                        weight=ft.FontWeight.BOLD,
-                        color="#065f46",
-                        expand=True
+                        "Telefonunuzun kamerasıyla fişin fotoğrafını çektiğiniz anda otomatik algılanıp okunacaktır.",
+                        size=10.5,
+                        color="#047857"
                     )
-                ], spacing=8)
+                ], spacing=4)
             )
 
-            def kamera_ac_ve_cekim_bekle(ev=None):
+            # A. UYGULAMA İÇİ DOĞRUDAN CANLI KAMERA VİZÖRÜ (flet-camera / ft.Camera) VE OTOMATİK KAMERA İZLEYİCİ
+            # KESİNLİKLE galeri_picker.pick_files ÇAĞIRMAZ (Galeri seçici açılmaz, doğrudan kamera açılır!)
+            def canli_kamera_vizoru_ac(ev=None):
                 dokunma_geribildirimi()
                 baslangic_zamani = time.time()
                 guncel_ilk = son_gorselleri_bul(limit=1)
                 onceki_en_yeni_yol = guncel_ilk[0]["yol"] if guncel_ilk else None
 
-                # 1. Diyalog içinde anında görsel geri bildirim göster
-                kamera_durum_kutusu.visible = True
-                try:
-                    kamera_durum_kutusu.update()
-                    page.update()
-                except Exception:
-                    pass
-
-                # 2. Arka planda DCIM/Camera klasörünü 120 saniye boyunca izle: yeni fotoğraf çekildiği an otomatik tara!
+                # 1. Arka planda DCIM/Camera klasörünü 180 saniye izle (Harici kamera ile çekilirse de anında yakalar)
+                izleyici_aktif = [True]
                 def _yeni_cekilen_fisi_izle():
-                    for _ in range(120):
+                    for _ in range(180):
+                        if not izleyici_aktif[0]:
+                            return
                         time.sleep(1.0)
                         try:
                             guncel = son_gorselleri_bul(limit=1)
@@ -4790,8 +4802,16 @@ def main(page: ft.Page):
                                 except Exception:
                                     mtime = 0
                                 if y_yol != onceki_en_yeni_yol and mtime >= (baslangic_zamani - 3.0):
+                                    izleyici_aktif[0] = False
                                     time.sleep(0.8)
-                                    close_app_dialog(page, fis_dialog)
+                                    try:
+                                        close_app_dialog(page, kamera_vizor_dialog)
+                                    except Exception:
+                                        pass
+                                    try:
+                                        close_app_dialog(page, fis_dialog)
+                                    except Exception:
+                                        pass
                                     show_app_snackbar(page, f"📸 Yeni çekilen fiş algılandı ({en_yeni['ad']}), analiz ediliyor...", color="#10b981")
                                     fis_gorselini_tara_ve_goster(y_yol)
                                     return
@@ -4800,39 +4820,171 @@ def main(page: ft.Page):
 
                 threading.Thread(target=_yeni_cekilen_fisi_izle, daemon=True).start()
 
-                # 3. Android'de veya Bilgisayarda Kamera / Görsel Seçiciyi Aç
-                # Flet'te AlertDialog açıkken sistem seçicisinin üstte açılabilmesi için önce diyaloğu kapatıyoruz
-                close_app_dialog(page, fis_dialog)
-                show_app_snackbar(
-                    page,
-                    "📷 Kamera / Fiş Seçici açılıyor... Fişin fotoğrafını çekin veya seçin!",
-                    color="#10b981"
-                )
-
-                # Masaüstünde (Windows/Mac) ise doğrudan dosya seçici penceresini aç
-                if not platform_mobil_mi():
+                # 2. Flet Yerel Kamera Kontrolünü (flet_camera.Camera veya ft.Camera) kontrol et
+                cam_mod = fc if fc is not None else (ft if hasattr(ft, "Camera") else None)
+                cam_ctrl = None
+                if cam_mod is not None and hasattr(cam_mod, "Camera"):
                     try:
-                        import tkinter as tk
-                        from tkinter import filedialog
-                        root = tk.Tk()
-                        root.withdraw()
-                        root.attributes("-topmost", True)
-                        dy_list = filedialog.askopenfilenames(
-                            title="Fiş Fotoğrafı Seçin",
-                            filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
+                        cam_ctrl = cam_mod.Camera(
+                            expand=True,
+                            preview_enabled=True,
+                            content=ft.Container(
+                                alignment=get_alignment_center(),
+                                content=ft.Icon(ft.Icons.CENTER_FOCUS_STRONG, color="white54", size=42)
+                            )
                         )
-                        root.destroy()
-                        if dy_list:
-                            gecerli_yollar = [y for y in dy_list if os.path.exists(y)]
-                            if gecerli_yollar:
-                                fis_gorselini_tara_ve_goster(gecerli_yollar)
-                                return
-                    except Exception as ex_tk:
-                        print("Masaüstü kamera/dosya seçici uyarısı:", ex_tk)
+                    except Exception as ex_cam_init:
+                        print("Camera control oluşturma uyarısı:", ex_cam_init)
+                        cam_ctrl = None
 
-                # Android / Mobil cihazda:
-                # Yöntem A: Android yerel Kamera uygulamasını doğrudan açmayı dene
-                kamera_dogrudan_acildi = False
+                # Eğer uygulama içi canlı kamera kontrolü mevcutsa (APK içinde flet-camera yüklüyse):
+                if cam_ctrl is not None:
+                    close_app_dialog(page, fis_dialog)
+                    vizor_durum_txt = ft.Text("📷 Kamera başlatılıyor...", size=11, color="#047857", weight=ft.FontWeight.W_600)
+                    kameralar_listesi = []
+                    aktif_kamera_idx = [0]
+                    kamera_hazir = [False]
+
+                    async def _kamerayi_baslat_async():
+                        try:
+                            # Önce çalışma zamanı kamera iznini iste (varsa)
+                            if fph is not None and hasattr(fph, "PermissionHandler"):
+                                try:
+                                    ph = fph.PermissionHandler()
+                                    if hasattr(page, "services"):
+                                        page.services.append(ph)
+                                    await ph.request(fph.Permission.CAMERA)
+                                except Exception:
+                                    pass
+
+                            cams = await cam_ctrl.get_available_cameras()
+                            if not cams:
+                                vizor_durum_txt.value = "⚠️ Kamera donanımı bulunamadı veya izin verilmedi. Telefonunuzun kendi kamerasıyla çekebilirsiniz (otomatik algılanır)."
+                                page.update()
+                                return
+
+                            kameralar_listesi.clear()
+                            kameralar_listesi.extend(cams)
+
+                            # Arka kamerayı (BACK) öncelikli seç
+                            secilen_cam = cams[0]
+                            for idx_c, c_desc in enumerate(cams):
+                                l_dir = str(getattr(c_desc, "lens_direction", "")).lower()
+                                c_name = str(getattr(c_desc, "name", "")).lower()
+                                if "back" in l_dir or "0" in c_name or "rear" in c_name:
+                                    secilen_cam = c_desc
+                                    aktif_kamera_idx[0] = idx_c
+                                    break
+
+                            res_preset = getattr(cam_mod.ResolutionPreset, "HIGH", getattr(cam_mod.ResolutionPreset, "MEDIUM", None)) if hasattr(cam_mod, "ResolutionPreset") else None
+                            img_fmt = getattr(cam_mod.ImageFormatGroup, "JPEG", None) if hasattr(cam_mod, "ImageFormatGroup") else None
+
+                            init_kwargs = {"description": secilen_cam, "enable_audio": False}
+                            if res_preset is not None:
+                                init_kwargs["resolution_preset"] = res_preset
+                            if img_fmt is not None:
+                                init_kwargs["image_format_group"] = img_fmt
+
+                            await cam_ctrl.initialize(**init_kwargs)
+                            kamera_hazir[0] = True
+                            vizor_durum_txt.value = "✅ Kamera Hazır! Fişi çerçeveye ortalayıp 'Fotoğraf Çek' butonuna basın."
+                            page.update()
+                        except Exception as ex_init:
+                            vizor_durum_txt.value = f"ℹ️ Canlı vizör başlatılamadı ({ex_init}). Telefon kamerasıyla çekerseniz otomatik algılanır."
+                            page.update()
+
+                    async def _fotograf_cek_async(ev_btn=None):
+                        dokunma_geribildirimi()
+                        if not kamera_hazir[0]:
+                            show_app_snackbar(page, "⏳ Kamera henüz hazırlanıyor, lütfen 1 saniye bekleyin...", color="#f59e0b")
+                            return
+                        try:
+                            vizor_durum_txt.value = "📸 Fotoğraf çekiliyor ve kaydediliyor..."
+                            page.update()
+                            img_bytes = await cam_ctrl.take_picture()
+                            if img_bytes:
+                                izleyici_aktif[0] = False
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
+                                    tf.write(img_bytes)
+                                    cekilen_yol = tf.name
+                                close_app_dialog(page, kamera_vizor_dialog)
+                                show_app_snackbar(page, "✅ Fiş fotoğrafı çekildi! Yapay zeka ile okunuyor...", color="#10b981")
+                                fis_gorselini_tara_ve_goster(cekilen_yol)
+                        except Exception as ex_take:
+                            show_app_snackbar(page, f"Fotoğraf çekme hatası: {ex_take}", color="#ef4444")
+
+                    async def _kamera_degistir_async(ev_sw=None):
+                        dokunma_geribildirimi()
+                        if len(kameralar_listesi) < 2:
+                            return
+                        aktif_kamera_idx[0] = (aktif_kamera_idx[0] + 1) % len(kameralar_listesi)
+                        yeni_cam = kameralar_listesi[aktif_kamera_idx[0]]
+                        try:
+                            await cam_ctrl.set_description(yeni_cam)
+                            page.update()
+                        except Exception:
+                            pass
+
+                    def _vizor_kapat(ev_k=None):
+                        izleyici_aktif[0] = False
+                        close_app_dialog(page, kamera_vizor_dialog)
+
+                    kamera_vizor_dialog = ft.AlertDialog(
+                        title=ft.Row([
+                            ft.Icon(ft.Icons.PHOTO_CAMERA_ROUNDED, color="#10b981", size=22),
+                            ft.Text("📷 Fiş Fotoğrafı Çek", size=15, weight=ft.FontWeight.BOLD, expand=True),
+                            ft.IconButton(
+                                icon=getattr(ft.Icons, "CAMERASWITCH_ROUNDED", getattr(ft.Icons, "FLIP_CAMERA_ANDROID", ft.Icons.CAMERA_ALT)),
+                                icon_color="#2563eb",
+                                tooltip="Ön / Arka Kamera Değiştir",
+                                on_click=lambda _: page.run_task(_kamera_degistir_async) if hasattr(page, "run_task") else None
+                            )
+                        ], spacing=6),
+                        content=ft.Container(
+                            width=340,
+                            height=430,
+                            content=ft.Column([
+                                ft.Container(
+                                    content=cam_ctrl,
+                                    width=335,
+                                    height=320,
+                                    bgcolor="black",
+                                    border_radius=12,
+                                    clip_behavior=ft.ClipBehavior.HARD_EDGE if hasattr(ft, "ClipBehavior") else None
+                                ),
+                                vizor_durum_txt,
+                                make_button(
+                                    "📸 FİŞİ ÇEK VE TARA",
+                                    icon=ft.Icons.CAMERA_ROUNDED,
+                                    bgcolor="#10b981",
+                                    color="white",
+                                    height=46,
+                                    width=335,
+                                    on_click=lambda _: page.run_task(_fotograf_cek_async) if hasattr(page, "run_task") else threading.Thread(target=lambda: asyncio.run(_fotograf_cek_async()), daemon=True).start()
+                                )
+                            ], spacing=8, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+                        ),
+                        actions=[
+                            make_button("✕ İptal", height=32, outlined=True, on_click=_vizor_kapat)
+                        ],
+                        actions_alignment=ft.MainAxisAlignment.END
+                    )
+                    show_app_dialog(page, kamera_vizor_dialog)
+                    if hasattr(page, "run_task"):
+                        page.run_task(_kamerayi_baslat_async)
+                    else:
+                        threading.Thread(target=lambda: asyncio.run(_kamerayi_baslat_async()), daemon=True).start()
+                    return
+
+                # 3. Eğer cihazda veya bilgisayarda flet_camera paketi henüz kurulmamışsa:
+                # Android'de yerel kamera intentini dene ve otomatik kamera izleyicisini aktif et (ASLA galeri_picker AÇMA!)
+                kamera_durum_kutusu.visible = True
+                try:
+                    kamera_durum_kutusu.update()
+                    page.update()
+                except Exception:
+                    pass
+
                 if platform_mobil_mi():
                     try:
                         from jnius import autoclass
@@ -4842,63 +4994,31 @@ def main(page: ft.Page):
                         cam_intent = Intent('android.media.action.STILL_IMAGE_CAMERA')
                         cam_intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         act.startActivity(cam_intent)
-                        kamera_dogrudan_acildi = True
                     except Exception:
-                        pass
-
-                    if not kamera_dogrudan_acildi:
                         try:
                             import subprocess
-                            ret = subprocess.call(['am', 'start', '-a', 'android.media.action.STILL_IMAGE_CAMERA'])
-                            if ret == 0:
-                                kamera_dogrudan_acildi = True
+                            subprocess.Popen(['am', 'start', '-a', 'android.media.action.STILL_IMAGE_CAMERA'])
                         except Exception:
                             pass
 
-                # Yöntem B: Flet FilePicker servisini (Android'de Kamera + Galeri seçiciyi açar) tetikle
-                try:
-                    res = galeri_picker.pick_files(
-                        dialog_title="Kamerayla Fiş Çek veya Seç",
-                        allow_multiple=True,
-                        with_data=True
-                    )
-                    if asyncio.iscoroutine(res):
-                        async def _await_cam_picker():
-                            try:
-                                files = await res
-                                if files and len(files) > 0:
-                                    yollar = []
-                                    for f in files:
-                                        p = getattr(f, "path", None)
-                                        if not p and hasattr(f, "bytes") and f.bytes:
-                                            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                                                tf.write(f.bytes)
-                                                p = tf.name
-                                        if p and os.path.exists(str(p)):
-                                            yollar.append(str(p))
-                                    if yollar:
-                                        fis_gorselini_tara_ve_goster(yollar)
-                            except Exception as ex_c:
-                                print("Kamera seçici coroutine hatası:", ex_c)
-                        if hasattr(page, "run_task"):
-                            page.run_task(_await_cam_picker)
-                        else:
-                            threading.Thread(target=lambda: asyncio.run(_await_cam_picker()), daemon=True).start()
-                except Exception as ex_p:
-                    show_app_snackbar(page, f"Kamera seçici uyarısı: {ex_p}", color="#ef4444")
+                show_app_snackbar(
+                    page,
+                    "📸 Kamera izleyici başlatıldı! Telefonunuzun kamerasıyla fişi çektiğiniz an otomatik taranacaktır.",
+                    color="#10b981"
+                )
 
             dialog_icerik = [
                 kamera_durum_kutusu,
                 make_button(
-                    "📷 Kamerayla Fiş Çek / Seç (Otomatik Algılar)",
+                    "📷 Kamerayı Aç & Fiş Çek",
                     icon=ft.Icons.PHOTO_CAMERA_ROUNDED,
                     bgcolor="#10b981",
                     color="white",
                     height=44,
-                    on_click=kamera_ac_ve_cekim_bekle
+                    on_click=canli_kamera_vizoru_ac
                 ),
                 make_button(
-                    "📁 Galeriden Çoklu Fiş Seç",
+                    "📁 Galeriden Fiş Seç (Tekli veya Çoklu Seçim)",
                     icon=ft.Icons.PHOTO_LIBRARY,
                     bgcolor="#2563eb",
                     color="white",
