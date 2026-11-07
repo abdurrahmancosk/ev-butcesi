@@ -17,6 +17,12 @@ git config --global user.email "abdurrahmancosk@gmail.com"
 git config --global --add safe.directory "%cd%"
 git config --global --add safe.directory "*"
 
+:: GitHub workflows klasorune build-apk.yml kopyala (varsa)
+if exist "build-apk.yml" (
+    if not exist ".github\workflows" mkdir ".github\workflows"
+    copy /y "build-apk.yml" ".github\workflowsuild-apk.yml" >nul 2>nul
+)
+
 :: Guvenlik icin gitignore olustur
 (
 echo gemini_key.json
@@ -26,7 +32,7 @@ echo *.sqlite3
 echo __pycache__/
 ) > .gitignore
 
-echo [1/3] Dosyalar zorunlu ekleniyor...
+echo [1/3] Dosyalar ekleniyor...
 git add -f main.py
 if exist "requirements.txt" git add -f requirements.txt
 if exist "build-apk.yml" git add -f build-apk.yml
