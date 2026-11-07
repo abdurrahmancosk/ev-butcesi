@@ -2528,7 +2528,6 @@ def main(page: ft.Page):
                 fis_analiz_tetikleyici[0](toplu_yollar)
 
     galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
-    galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
     if hasattr(page, "services"):
         try:
             if galeri_picker not in page.services:
@@ -2604,29 +2603,14 @@ def main(page: ft.Page):
         page.clean()
         page.scroll = ft.ScrollMode.AUTO
         # page.clean() sonrası FilePicker servislerini yeniden bağla (Kamera & Galeri seçicinin her zaman tepki vermesi için)
+        # FilePicker servislerini Flet mobil mimarisine uygun şekilde overlay listesine güvenle bağla
         for _pk in (galeri_picker, csv_picker):
             try:
-                if hasattr(page, "services") and _pk not in page.services:
-                    page.services.append(_pk)
-            except Exception:
-                pass
-            try:
-                if hasattr(page, "overlay") and not hasattr(page, "services") and _pk not in page.overlay:
-                    pass
+                if hasattr(page, "overlay") and _pk not in page.overlay:
+                    page.overlay.append(_pk)
             except Exception:
                 pass
 
-        # Masaüstü ve tarayıcı için Flet Audio player hazırlığı
-        if _ses_dosyasi_yolu and os.path.exists(_ses_dosyasi_yolu) and hasattr(ft, "Audio"):
-            try:
-                audio_ctrl = ft.Audio(src=_ses_dosyasi_yolu, autoplay=False, volume=0.5)
-                _flet_audio_player[0] = audio_ctrl
-                if hasattr(page, "overlay"):
-                    page.overlay.append(audio_ctrl)
-                elif hasattr(page, "services"):
-                    page.services.append(audio_ctrl)
-            except Exception as ex_aud:
-                print("Flet audio init uyarısı:", ex_aud)
         aktif_tema_modu = tema_oku()
         if aktif_tema_modu == "light":
             page.theme_mode = ft.ThemeMode.LIGHT
@@ -4981,35 +4965,18 @@ def main(page: ft.Page):
             # Galeri ve Dosya Seçici Tetikleme (Toplu Fiş Seçimi - Hem PC hem Mobil)
             def galeri_tiklandi_aksiyon(ev=None):
                 close_app_dialog(page, fis_dialog)
-                show_app_snackbar(page, "📂 Fiş seçici açılıyor (Birden fazla seçebilirsiniz)...", color="#2563eb")
+                show_app_snackbar(page, "📂 Fiş seçici açılıyor...", color="#2563eb")
 
-                if not platform_mobil_mi():
-                    try:
-                        import tkinter as tk
-                        from tkinter import filedialog
-                        root = tk.Tk()
-                        root.withdraw()
-                        root.attributes("-topmost", True)
-                        dy_list = filedialog.askopenfilenames(
-                            title="Bir veya Birden Fazla Fiş Görseli Seçin",
-                            filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
-                        )
-                        root.destroy()
-                        if dy_list:
-                            gecerli_yollar = [y for y in dy_list if os.path.exists(y)]
-                            if gecerli_yollar:
-                                fis_gorselini_tara_ve_goster(gecerli_yollar)
-                                return
-                    except Exception as ex_tk:
-                        print("Tkinter çoklu seçici uyarısı:", ex_tk)
-
-                # Mobilde hazır galeri_picker servisini çoklu seçimle tetikle
+                # Mobilde hazır galeri_picker servisini tetikle
                 try:
+                    if hasattr(page, "overlay") and galeri_picker not in page.overlay:
+                        page.overlay.append(galeri_picker)
                     galeri_picker.pick_files(
-                        dialog_title="Fiş Fotoğraflarını Seçin",
+                        dialog_title="Fiş Fotoğrafı Seçin",
                         file_type=ft.FilePickerFileType.IMAGE,
                         allow_multiple=True
                     )
+                    page.update()
                 except Exception as ex_pk_call:
                     print("pick_files hata:", ex_pk_call)
 
