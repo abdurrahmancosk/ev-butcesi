@@ -2543,12 +2543,6 @@ def main(page: ft.Page):
             print("Picker sonucu işleme hatası:", ex_pk_res)
 
     galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
-    if hasattr(page, "overlay"):
-        try:
-            if galeri_picker not in page.overlay:
-                page.overlay.append(galeri_picker)
-        except Exception:
-            pass
     if hasattr(page, "services"):
         try:
             if galeri_picker not in page.services:
@@ -2624,16 +2618,11 @@ def main(page: ft.Page):
         page.scroll = ft.ScrollMode.AUTO
         # page.clean() sonrası FilePicker servislerini yeniden bağla (Kamera & Galeri seçicinin her zaman tepki vermesi için)
         # FilePicker servislerini sayfa servisine bağla (Overlay'e ASLA eklenmez, kırmızı hatayı önler)
-        # FilePicker servislerini Flet ortamına güvenle bağla
+        # FilePicker servislerini Flet ortamına bağla (Overlay'e ASLA eklenmez, kırmızı hata vermez!)
         for _pk in (galeri_picker, csv_picker):
             try:
                 if hasattr(page, "services") and _pk not in page.services:
                     page.services.append(_pk)
-            except Exception:
-                pass
-            try:
-                if hasattr(page, "overlay") and _pk not in page.overlay:
-                    page.overlay.append(_pk)
             except Exception:
                 pass
 
@@ -5048,9 +5037,8 @@ def main(page: ft.Page):
 
                 # Mobilde hazır galeri_picker servisini tetikle
                 try:
-                    if hasattr(page, "overlay") and galeri_picker not in page.overlay:
-                        page.overlay.append(galeri_picker)
-                    page.update()
+                    if hasattr(page, "services") and galeri_picker not in page.services:
+                        page.services.append(galeri_picker)
                     galeri_picker.pick_files(
                         dialog_title="Fiş Fotoğraflarını Seçin",
                         allow_multiple=True
@@ -5177,9 +5165,8 @@ def main(page: ft.Page):
                 show_app_snackbar(page, "📸 Kamera açılıyor...", color="#10b981")
 
                 try:
-                    if hasattr(page, "overlay") and galeri_picker not in page.overlay:
-                        page.overlay.append(galeri_picker)
-                    page.update()
+                    if hasattr(page, "services") and galeri_picker not in page.services:
+                        page.services.append(galeri_picker)
                     galeri_picker.pick_files(
                         dialog_title="Fiş Fotoğrafı Çek veya Seç",
                         allow_multiple=False
