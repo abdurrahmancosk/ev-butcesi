@@ -1,0 +1,5 @@
+*.json
+*.csv
+*.bat
+*.vbs
+__pycache__/
