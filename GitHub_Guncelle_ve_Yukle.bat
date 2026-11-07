@@ -1,6 +1,4 @@
 @echo off
-setlocal EnableDelayedExpansion
-chcp 65001 >nul
 title GitHub Guncelleme ve APK Derleme Araci
 color 0B
 
@@ -13,70 +11,44 @@ cd /d "%~dp0"
 echo Calisma dizini: %cd%
 echo.
 
-set REPO_URL=https://github.com/abdurrahmancosk/ev-butcesi.git
+:: Git guvenli dizin ve kimlik ayarlari
+git config --global user.name "Abdurrahman Coskun"
+git config --global user.email "abdurrahmancosk@gmail.com"
+git config --global --add safe.directory "%cd%"
+git config --global --add safe.directory "*"
 
-:: Git kontrolu
-where git >nul 2>nul
-if errorlevel 1 (
-    echo [HATA] Git programi bulunamadi! Lutfen Git'in kurulu oldugundan emin olun.
-    goto bitir
-)
+:: Guvenlik icin gitignore olustur
+(
+echo gemini_key.json
+echo *.csv
+echo *.db
+echo *.sqlite3
+echo __pycache__/
+) > .gitignore
 
-:: Guvenli dizin tanimlamasi (Google Drive ag/sanal surucu izin sorunu icin)
-git config --global --add safe.directory "%cd%" 2>nul
-git config --global --add safe.directory "*" 2>nul
+echo [1/3] Dosyalar zorunlu ekleniyor...
+git add -f main.py
+if exist "requirements.txt" git add -f requirements.txt
+if exist "build-apk.yml" git add -f build-apk.yml
+if exist ".github" git add -f .github
+git add -f .gitignore
+git add -f GitHub_Guncelle_ve_Yukle.bat
+git add -f EvButcesi_Baslat.bat
+git add -f EvButcesi.vbs
 
-:: Git kullanici bilgisi tanimla (hata vermemesi icin)
-git config user.name >nul 2>nul
-if errorlevel 1 (
-    git config --global user.name "Abdurrahman Coskun"
-    git config --global user.email "abdurrahmancosk@gmail.com"
-)
-
-if not exist ".git" (
-    echo Depo olusturuluyor...
-    git init
-    git branch -M main
-    git remote add origin %REPO_URL%
-) else (
-    git remote set-url origin %REPO_URL% 2>nul
-    git branch -M main 2>nul
-)
-
-echo [1/3] Dosyalar hazirlaniyor...
-git add -A
-
+echo.
+echo [2/3] Paket olusturuluyor...
 set TARIH=%date% %time%
-echo [2/3] Degisiklikler paketleniyor (%TARIH%)...
-git commit -m "Guncelleme: %TARIH%"
+git commit -m "Guncelleme: %TARIH%" --allow-empty
 
 echo.
-echo [3/3] GitHub ile esitleniyor ve gonderiliyor...
-:: Eger GitHub'da onceden olusan commitler varsa once yerel ile birlestir
-git pull origin main --rebase --allow-unrelated-histories 2>nul
-if errorlevel 1 (
-    git pull origin master --rebase --allow-unrelated-histories 2>nul
-)
+echo [3/3] GitHub'a gonderiliyor (Push)...
+git push -u origin main --force
 
-git push -u origin main
-if errorlevel 1 (
-    echo 'main' basarisiz oldu, zorlayarak guncelleniyor (force push)...
-    git push -u origin main --force
-)
-
-if errorlevel 1 (
-    echo.
-    echo [UYARI] Gonderim tamamlanamadi!
-    echo Tarayicinizda GitHub oturum acma ekrani geldiyse lutfen yetki verin.
-) else (
-    echo.
-    echo ===================================================================
-    echo [TEBRIKLER] Kodlar GitHub'a basariyla gonderildi!
-    echo GitHub Actions otomatik olarak yeni APK derlemesini baslatti.
-    echo ===================================================================
-)
-
-:bitir
 echo.
-echo Pencereyi kapatmak icin klavyeden herhangi bir tusa basin...
-pause >nul
+echo ===================================================================
+echo                     ISLEM TAMAMLANDI!
+echo ===================================================================
+echo.
+echo Cikmak icin bir tusa basin...
+cmd /k

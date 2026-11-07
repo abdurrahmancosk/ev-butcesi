@@ -1,5 +1,5 @@
-*.json
+gemini_key.json
 *.csv
-*.bat
-*.vbs
+*.db
+*.sqlite3
 __pycache__/
