@@ -4668,6 +4668,44 @@ def main(page: ft.Page):
                                 ], spacing=1, expand=True)
                             ], vertical_alignment=ft.CrossAxisAlignment.START, spacing=4)
 
+                            # Kategori seçici dropdown ve öneri butonu
+                            kat_options = [make_option(k) for k in GIDER_KATEGORILERI]
+                            kat_dd = make_dropdown(
+                                options=kat_options,
+                                value=u_kat if u_kat in GIDER_KATEGORILERI else GIDER_KATEGORILERI[0],
+                                width=175,
+                                dense=True
+                            )
+
+                            # Gemini tarafından önerilen yeni kategori varsa buton olarak göster
+                            u_oneri_kat = str(u.get("oneri_kategori") or "").strip()
+                            oneri_btn = None
+                            if u_oneri_kat and u_oneri_kat not in GIDER_KATEGORILERI and len(u_oneri_kat) > 1:
+                                def _oneri_kat_ekle(ev, oneri_k=u_oneri_kat, target_dd=kat_dd):
+                                    dokunma_geribildirimi()
+                                    if oneri_k not in GIDER_KATEGORILERI:
+                                        GIDER_KATEGORILERI.append(oneri_k)
+                                        if hasattr(target_dd, "options"):
+                                            target_dd.options.append(make_option(oneri_k))
+                                    target_dd.value = oneri_k
+                                    try:
+                                        target_dd.update()
+                                    except Exception:
+                                        pass
+                                    show_app_snackbar(page, f"💡 '{oneri_k}' kategorisi seçildi!", color="#2563eb")
+
+                                oneri_btn = ft.Container(
+                                    content=ft.Row([
+                                        ft.Icon(ft.Icons.LIGHTBULB_OUTLINE, size=13, color="#d97706"),
+                                        ft.Text(f"+ {u_oneri_kat[:12]}", size=9.5, color="#d97706", weight=ft.FontWeight.W_600)
+                                    ], spacing=2),
+                                    bgcolor="#fef3c7",
+                                    padding=make_padding(4, 2),
+                                    border_radius=6,
+                                    tooltip=f"Önerilen: '{u_oneri_kat}' (Tıkla ve Uygula)",
+                                    on_click=_oneri_kat_ekle
+                                )
+
                             urun_satiri = ft.Container(
                                 content=ft.Column([
                                     urun_baslik_satiri,
@@ -4909,6 +4947,10 @@ def main(page: ft.Page):
                         f"✨ {yeni_urun_sayisi} yeni ürün seçili • ⚠️ {toplam_mukerrer_sayisi} mükerrer ürünün işareti kaldırıldı."
                     )
 
+                    dialog_w = min(page.width - 24, 420) if (getattr(page, "width", None) and page.width > 0) else 390
+                    dialog_h = min(page.height - 60, 560) if (getattr(page, "height", None) and page.height > 0) else 500
+                    scroll_h = max(220, dialog_h - 170)
+
                     fis_hesap_dd = make_dropdown(
                         label="Fişi Ödeyen Kişi (Nakit Hesabından Düşer)",
                         options=[
@@ -4916,7 +4958,7 @@ def main(page: ft.Page):
                             f"👤 Hatice"
                         ],
                         value=f"👑 Abdurrahman" if kullanici == "Abdurrahman" else f"👤 Hatice",
-                        width=335,
+                        width=max(260, dialog_w - 40),
                         dense=True
                     )
 
@@ -4937,12 +4979,12 @@ def main(page: ft.Page):
                                 fis_hesap_dd,
                                 ft.Container(
                                     content=ft.Column(toplu_urun_kartlari, scroll=ft.ScrollMode.AUTO, spacing=8),
-                                    height=380,
+                                    height=scroll_h,
                                     padding=2
                                 )
-                            ], spacing=8),
-                            width=410,
-                            height=480
+                            ], spacing=8, tight=True),
+                            width=dialog_w,
+                            height=dialog_h
                         ),
                         actions=[
                             make_button("✕ İptal", height=34, outlined=True, on_click=lambda _: close_app_dialog(page, toplu_fis_dialog)),
