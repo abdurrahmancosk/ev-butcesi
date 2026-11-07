@@ -1,9 +1,12 @@
-name: Build Android APK
+name: Build Android APK & Release
 
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -38,8 +41,27 @@ jobs:
         run: |
           yes | flet build apk --yes --project "HaneButcesi" --permissions camera microphone --org "com.evbutcesi.app" --android-permissions android.permission.INTERNET=true --android-permissions android.permission.VIBRATE=true --android-permissions android.permission.READ_EXTERNAL_STORAGE=true --android-permissions android.permission.WRITE_EXTERNAL_STORAGE=true --android-permissions android.permission.MANAGE_EXTERNAL_STORAGE=true --android-permissions android.permission.READ_MEDIA_IMAGES=true --android-permissions android.permission.RECORD_AUDIO=true --android-permissions android.permission.MODIFY_AUDIO_SETTINGS=true --android-permissions android.permission.POST_NOTIFICATIONS=true --android-permissions android.permission.CAMERA=true
 
+      - name: Prepare APK File
+        run: |
+          mkdir -p release_dist
+          cp build/apk/*.apk release_dist/HaneButcesi.apk
+
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: HaneButcesi-Android-APK
-          path: build/apk/*.apk
+          path: release_dist/HaneButcesi.apk
+
+      - name: Publish Direct APK Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "En Güncel Ev Bütçesi Sürümü"
+          body: |
+            Bu sürüm GitHub tarafından otomatik olarak derlenmiştir.
+            Aşağıdaki HaneButcesi.apk dosyasına dokunarak telefonunuza doğrudan kurabilirsiniz.
+          files: release_dist/HaneButcesi.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
