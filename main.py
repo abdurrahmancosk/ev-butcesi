@@ -2518,18 +2518,29 @@ def main(page: ft.Page):
     fis_analiz_tetikleyici = [None]
 
     def on_galeri_secimi_tamamlandi(e):
-        if hasattr(e, "files") and e.files and len(e.files) > 0:
-            toplu_yollar = []
-            for f in e.files:
-                p = getattr(f, "path", None)
-                if not p and hasattr(f, "bytes") and f.bytes:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                        tf.write(f.bytes)
-                        p = tf.name
-                if p and os.path.exists(str(p)):
-                    toplu_yollar.append(str(p))
-            if toplu_yollar and fis_analiz_tetikleyici[0]:
-                fis_analiz_tetikleyici[0](toplu_yollar)
+        try:
+            secilen_dosyalar = getattr(e, "files", None)
+            if not secilen_dosyalar and isinstance(e, list):
+                secilen_dosyalar = e
+
+            if secilen_dosyalar:
+                toplu_yollar = []
+                for f in secilen_dosyalar:
+                    p = getattr(f, "path", None)
+                    # Android'de path bazen doğrudan string ya da bytes olarak gelir
+                    if not p and hasattr(f, "name") and f.name:
+                        p = f.name
+                    if not p and hasattr(f, "bytes") and f.bytes:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
+                            tf.write(f.bytes)
+                            p = tf.name
+                    if p:
+                        toplu_yollar.append(str(p))
+
+                if toplu_yollar and fis_analiz_tetikleyici[0]:
+                    fis_analiz_tetikleyici[0](toplu_yollar)
+        except Exception as ex_pk_res:
+            print("Picker sonucu işleme hatası:", ex_pk_res)
 
     galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
     if hasattr(page, "services"):
@@ -5004,12 +5015,30 @@ def main(page: ft.Page):
                 close_app_dialog(page, fis_dialog)
                 show_app_snackbar(page, "📂 Fiş seçici açılıyor...", color="#2563eb")
 
+                if not platform_mobil_mi():
+                    try:
+                        import tkinter as tk
+                        from tkinter import filedialog
+                        root = tk.Tk()
+                        root.withdraw()
+                        root.attributes("-topmost", True)
+                        dy_list = filedialog.askopenfilenames(
+                            title="Bir veya Birden Fazla Fiş Görseli Seçin",
+                            filetypes=[("Resim Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
+                        )
+                        root.destroy()
+                        if dy_list:
+                            gecerli_yollar = [y for y in dy_list if os.path.exists(y)]
+                            if gecerli_yollar:
+                                fis_gorselini_tara_ve_goster(gecerli_yollar)
+                                return
+                    except Exception as ex_tk:
+                        print("Tkinter seçici uyarısı:", ex_tk)
+
+                # Mobilde hazır galeri_picker servisini tetikle
                 try:
-                    if hasattr(page, "services") and galeri_picker not in page.services:
-                        page.services.append(galeri_picker)
                     galeri_picker.pick_files(
-                        dialog_title="Fiş Fotoğrafı Seçin",
-                        file_type=ft.FilePickerFileType.IMAGE,
+                        dialog_title="Fiş Fotoğraflarını Seçin",
                         allow_multiple=True
                     )
                 except Exception as ex_pk_call:
@@ -5130,122 +5159,16 @@ def main(page: ft.Page):
             # A. XIAOMI REDMI NOTE 9 PRO & REDMI 14C İÇİN ÖZEL KAMERA BAŞLATICI
             def redmi_kamera_ac_ve_izle(ev=None):
                 dokunma_geribildirimi()
-                baslangic_zamani = time.time()
-                guncel_ilk = son_gorselleri_bul(limit=1)
-                onceki_en_yeni_yol = guncel_ilk[0]["yol"] if guncel_ilk else None
-                # Android'de kamera seçiciyi doğrudan tetikle
+                close_app_dialog(page, fis_dialog)
+                show_app_snackbar(page, "📸 Kamera açılıyor...", color="#10b981")
+
                 try:
                     galeri_picker.pick_files(
-                        dialog_title="Fiş Fotoğrafı Çek veya Seç",
-                        file_type=ft.FilePickerFileType.IMAGE,
+                        dialog_title="Fiş Fotoğrafı Çek",
                         allow_multiple=False
                     )
-                except Exception as ex_pk:
-                    print("Kamera pick hatası:", ex_pk)
-
-                # 1. Xiaomi / Redmi yerel Kamera uygulamasını doğrudan açmayı dene
-                kamera_acildi = False
-                if platform_mobil_mi():
-                    # Yöntem 1: pyjnius ile Android ACTION_IMAGE_CAPTURE / STILL_IMAGE_CAMERA
-                    try:
-                        from jnius import autoclass
-                        PythonActivity = autoclass('org.kivy.android.PythonActivity')
-                        Intent = autoclass('android.content.Intent')
-                        MediaStore = autoclass('android.provider.MediaStore')
-                        act = PythonActivity.mActivity
-                        
-                        # Xiaomi Redmi'de doğrudan çalışan kamera intenti
-                        cam_intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-                        cam_intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        act.startActivity(cam_intent)
-                        kamera_acildi = True
-                    except Exception:
-                        try:
-                            from jnius import autoclass
-                            PythonActivity = autoclass('org.kivy.android.PythonActivity')
-                            Intent = autoclass('android.content.Intent')
-                            act = PythonActivity.mActivity
-                            cam_intent = Intent("android.media.action.STILL_IMAGE_CAMERA")
-                            cam_intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            act.startActivity(cam_intent)
-                            kamera_acildi = True
-                        except Exception:
-                            pass
-
-                    # Yöntem 2: Android kabuk (shell) am start komutuyla Xiaomi kamera paketini tetikle
-                    if not kamera_acildi:
-                        for am_cmd in [
-                            ["am", "start", "-a", "android.media.action.IMAGE_CAPTURE"],
-                            ["am", "start", "-a", "android.media.action.STILL_IMAGE_CAMERA"],
-                            ["am", "start", "-n", "com.android.camera/.Camera"]
-                        ]:
-                            try:
-                                import subprocess
-                                ret = subprocess.call(am_cmd)
-                                if ret == 0:
-                                    kamera_acildi = True
-                                    break
-                            except Exception:
-                                pass
-
-                # 2. Kamera butonuna basıldığı an canlı izleyiciyi başlat (Xiaomi Redmi DCIM/Camera klasörünü 180 sn izler)
-                kamera_durum_kutusu.visible = True
-                try:
-                    kamera_durum_kutusu.update()
-                    page.update()
-                except Exception:
-                    pass
-
-                def _redmi_yeni_fotografi_izle():
-                    for _ in range(180):
-                        time.sleep(1.0)
-                        try:
-                            guncel = son_gorselleri_bul(limit=1)
-                            if guncel:
-                                en_yeni = guncel[0]
-                                y_yol = en_yeni["yol"]
-                                try:
-                                    mtime = os.path.getmtime(y_yol)
-                                except Exception:
-                                    mtime = 0
-                                if y_yol != onceki_en_yeni_yol and mtime >= (baslangic_zamani - 2.0):
-                                    time.sleep(0.8)
-                                    close_app_dialog(page, fis_dialog)
-                                    show_app_snackbar(page, f"📸 Redmi kamerasıyla çekilen fiş algılandı ({en_yeni['ad']}), analiz ediliyor...", color="#10b981")
-                                    fis_gorselini_tara_ve_goster(y_yol)
-                                    return
-                        except Exception:
-                            pass
-
-                threading.Thread(target=_redmi_yeni_fotografi_izle, daemon=True).start()
-
-                # Masaüstünde ise dosya seçici aç
-                if not platform_mobil_mi():
-                    try:
-                        import tkinter as tk
-                        from tkinter import filedialog
-                        root = tk.Tk()
-                        root.withdraw()
-                        root.attributes("-topmost", True)
-                        dy_list = filedialog.askopenfilenames(
-                            title="Fiş Fotoğrafı Seçin",
-                            filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
-                        )
-                        root.destroy()
-                        if dy_list:
-                            gecerli_yollar = [y for y in dy_list if os.path.exists(y)]
-                            if gecerli_yollar:
-                                close_app_dialog(page, fis_dialog)
-                                fis_gorselini_tara_ve_goster(gecerli_yollar)
-                                return
-                    except Exception:
-                        pass
-
-                show_app_snackbar(
-                    page,
-                    "📷 Xiaomi Redmi Kamera Aktif! Kamerayla fişi çekip uygulamaya döndüğünüzde fiş otomatik taranacaktır.",
-                    color="#10b981"
-                )
+                except Exception as ex_cam_pk:
+                    print("Kamera pick_files hatası:", ex_cam_pk)
 
             dialog_icerik = [
                 kamera_durum_kutusu,
