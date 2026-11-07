@@ -1199,10 +1199,13 @@ class SupabaseRestClient:
         self.key = key
         self.headers = {
             "apikey": key,
-            "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
             "Prefer": "return=representation"
         }
+        # Yalnızca anahtar eski JWT formatındaysa (eyJ...) Authorization başlığı ekle
+        # sb_publishable_ anahtarı Authorization: Bearer başlığına KONULMAZ (PostgREST 401 verir)
+        if str(key).startswith("eyJ"):
+            self.headers["Authorization"] = f"Bearer {key}"
 
     def table(self, table_name):
         return _SupabaseQueryBuilder(self, table_name)
@@ -2630,11 +2633,19 @@ def main(page: ft.Page):
         # FilePicker'ların overlay içinde olduğunu teyit et
         # FilePicker overlay kaldırıldı (Kırmızı hata kesin olarak önlendi)
 
-        # FilePicker'ları sayfa servislerine bağla
+        # page.clean() sonrası taze FilePicker servislerini yeniden üret ve bağla
+        nonlocal galeri_picker, csv_picker
+        galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
+        csv_picker = ft.FilePicker(on_result=on_csv_secimi_tamamlandi)
         for _pk in (galeri_picker, csv_picker):
-            if hasattr(page, "services") and _pk not in page.services:
+            if hasattr(page, "services"):
                 try:
                     page.services.append(_pk)
+                except Exception:
+                    pass
+            elif hasattr(page, "_services"):
+                try:
+                    page._services.append(_pk)
                 except Exception:
                     pass
         aktif_tema_modu = tema_oku()
@@ -9278,6 +9289,10 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                             secilen_donem_bit[0] = p_bit
 
                         arayuzu_guncelle()
+                        try:
+                            page.update()
+                        except Exception:
+                            pass
             except Exception as ex_sync:
                 print("Açılış arka plan bulut çekme hatası:", ex_sync)
 
