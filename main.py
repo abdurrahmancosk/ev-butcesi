@@ -1737,7 +1737,7 @@ kategoriler = GIDER_KATEGORILERI
 
 GEMINI_KEY_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "gemini_key.json")
 
-VARSAYILAN_GEMINI_KEY = "AQ.Ab8RN6KSod44ubQVBE5AEcAaqi2mtyCEo0lRz3AO0Z2vlSaWnA"
+VARSAYILAN_GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 def gemini_api_key_al():
     """Kullanıcının yerel olarak saklanan veya ortamdaki Gemini API anahtarını güvenle çeker."""
