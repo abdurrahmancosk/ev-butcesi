@@ -16,6 +16,269 @@ import urllib.request
 import flet as ft
 
 # ==============================================================================
+# Akıllı Fiyat Karşılaştırma & Bilgilendirme Motoru (%90 Benzerlik & Miktar Eşleşmesi Kuralı)
+# ==============================================================================
+import difflib
+
+def tr_lower(text):
+    """Türkçe karakterleri (İ, I, vb.) kayıpsız küçük harfe dönüştürür."""
+    if not text:
+        return ""
+    return str(text).replace("İ", "i").replace("I", "ı").lower().strip()
+
+def parse_turk_tutari(val_str):
+    if not val_str:
+        return 0.0
+    s = str(val_str).strip().replace('"', '').replace("'", "").replace("“", "").replace("”", "")
+    s = s.replace("TL", "").replace("₺", "").replace(" ", "")
+    if not s:
+        return 0.0
+    if "." in s and "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
+def karsilastirma_engelli_mi(urun, firma="", kategori=""):
+    """
+    Kullanıcı Kesin Kuralları:
+    - Kredi kartı borç ödemeleri asla karşılaştırılmaz.
+    - Eczane, reçete, ilaç masrafları asla karşılaştırılmaz.
+    - Çay parası/ücreti, pansiyon, otel, aidat, fatura asla karşılaştırılmaz.
+    - Kantin hazır yiyecek/içecekleri market ürünleriyle asla karşılaştırılmaz.
+    """
+    u = tr_lower(urun)
+    f = tr_lower(firma)
+    k = tr_lower(kategori)
+
+    # 1. Kredi Kartı ve Borç Ödemeleri (Kullanıcı Kuralı: "kredi kartı borç ödemelerini karşılaştırmayalım")
+    if any(w in k for w in ["kredi kart", "borç", "kredi", "borc"]) or \
+       any(w in u for w in ["kredi kart", "borç", "borc", "ekstre", "asgari", "limit", "kredi öde", "kart öde"]):
+        return True
+
+    # 2. Eczane, İlaç, Sağlık ve Muayene (Kullanıcı Kuralı: "eczaneden alınan ilaç ücretlerini karşılaştırmak mantıklı değil")
+    if any(w in k for w in ["sağlık", "saglik", "ilaç", "ilac", "medikal"]) or \
+       any(w in f for w in ["eczane", "hastane", "poliklinik", "sağlık ocağı", "saglik ocagi"]) or \
+       any(w in u for w in ["ilaç", "ilac", "reçete", "recete", "muayene", "katkı payı", "katki payi", "aspirin", "parol", "şurup", "surup", "merhem"]):
+        return True
+
+    # 3. Pansiyon, Çay Ücreti, Faturalar, Aidat (Kullanıcı Kuralı: "çaykur didi ile pansiyon çay ücretini karşılaştırmak doğru değil")
+    if any(w in f for w in ["pansiyon", "otel", "kantin"]) or \
+       any(w in u for w in ["çay ücreti", "cay ucreti", "çay parası", "cay parasi", "ücreti", "ucreti", "parası", "parasi", "pansiyon", "otel"]) or \
+       any(w in k for w in ["fatura", "kira", "aidat", "vergi", "harç", "harc", "sigorta", "transfer"]):
+        return True
+
+    return False
+
+def urun_olcu_ve_miktar_cikar(urun, miktar_str=""):
+    """
+    Ürün adından ve miktarından paket hacmi veya gramajını çıkarır.
+    Örn: '1.5 L' -> ('ml', 1500), '200 ml' -> ('ml', 200), '3x200g' -> ('g', 600)
+    """
+    metin = tr_lower(str(urun or "") + " " + str(miktar_str or ""))
+
+    coklu = re.search(r'(\d+)\s*[xX*]\s*(\d+)\s*(g|gr|gram|ml|adet)?', metin)
+    if coklu:
+        adet = float(coklu.group(1))
+        bm = float(coklu.group(2))
+        tur = coklu.group(3) or "g"
+        if "ml" in tur: return ("ml", adet * bm)
+        elif "g" in tur: return ("g", adet * bm)
+        else: return ("adet", adet * bm)
+
+    lit = re.search(r'(\d+([.,]\d+)?)\s*(l|lt|litre)\b', metin)
+    if lit:
+        val = float(lit.group(1).replace(",", "."))
+        return ("ml", val * 1000.0)
+
+    ml_m = re.search(r'(\d+([.,]\d+)?)\s*(ml|cc)\b', metin)
+    if ml_m:
+        val = float(ml_m.group(1).replace(",", "."))
+        return ("ml", val)
+
+    kg_m = re.search(r'(\d+([.,]\d+)?)\s*(kg|kilo|kilogram)\b', metin)
+    if kg_m:
+        val = float(kg_m.group(1).replace(",", "."))
+        return ("g", val * 1000.0)
+
+    g_m = re.search(r'(\d+([.,]\d+)?)\s*(g|gr|gram)\b', metin)
+    if g_m:
+        val = float(g_m.group(1).replace(",", "."))
+        return ("g", val)
+
+    adt = re.search(r'(\d+)\s*(adet|tane)\b', metin)
+    if adt:
+        return ("adet", float(adt.group(1)))
+
+    return (None, None)
+
+def tokenize_urun_adi(s):
+    """Ürün adını temizler ve gereksiz ambalaj/market marka kelimelerini arındırır."""
+    s_clean = tr_lower(s)
+    s_clean = re.sub(r'[\(\)\[\]\{\}\-\.,/]', ' ', s_clean)
+    ign = {
+        "1kg", "1 kg", "kg", "g", "gr", "gram", "ml", "cc", "l", "lt", "litre",
+        "adet", "tane", "koli", "paket", "bim", "a101", "şok", "sok", "migros",
+        "carrefour", "yöremce", "yoremce", "binvezir", "dost", "daphne"
+    }
+    words = [w for w in s_clean.split() if w not in ign]
+    return words
+
+def urun_benzerlik_orani(u1, u2):
+    """İki ürün adı arasındaki metin benzerlik oranını (0.0 - 1.0) hesaplar."""
+    t1 = tokenize_urun_adi(u1)
+    t2 = tokenize_urun_adi(u2)
+    if not t1 or not t2:
+        return 0.0
+
+    s1_direct = " ".join(t1)
+    s2_direct = " ".join(t2)
+
+    # Kelime sırasından bağımsız karşılaştırma (örn: 'bulgur köftelik' ile 'köftelik bulg')
+    s1_sorted = " ".join(sorted(t1))
+    s2_sorted = " ".join(sorted(t2))
+
+    r_direct = difflib.SequenceMatcher(None, s1_direct, s2_direct).ratio()
+    r_sorted = difflib.SequenceMatcher(None, s1_sorted, s2_sorted).ratio()
+
+    return max(r_direct, r_sorted)
+
+def urunler_birebir_eslesiyor_mu(u1, m1, f1, k1, u2, m2, f2, k2):
+    """
+    Kullanıcı Kesin Kuralı:
+    1. Ürün isimleri en az %90 benzer ise karşılaştırma yapılır (similarity >= 0.90), aksi durumda KESİNLİKLE yapılmaz.
+    2. Miktarlar belirtilmişse aynı olması şarttır (200 ml vs 1L, kalem pil vs uçan kalem, esmer bulgur vs bulgur engellenir).
+    3. Kredi kartı, eczane, çay ücreti/pansiyon, faturalar asla karşılaştırılmaz.
+    """
+    # 1. Yasaklı kategori/kalem testi
+    if karsilastirma_engelli_mi(u1, f1, k1) or karsilastirma_engelli_mi(u2, f2, k2):
+        return False
+
+    # 2. Kalem pil ile uçan kalem gibi alakasız eşleşmeleri kökten engelle
+    u1_low = tr_lower(u1)
+    u2_low = tr_lower(u2)
+    if ("pil" in u1_low and "pil" not in u2_low) or ("pil" in u2_low and "pil" not in u1_low):
+        return False
+    if ("soğuk çay" in u1_low or "soguk cay" in u1_low or "didi" in u1_low or "fuse tea" in u1_low) != \
+       ("soğuk çay" in u2_low or "soguk cay" in u2_low or "didi" in u2_low or "fuse tea" in u2_low):
+        return False
+    if ("konserve" in u1_low) != ("konserve" in u2_low):
+        return False
+    if ("un" in u1_low.split() or "unu" in u1_low.split()) != ("un" in u2_low.split() or "unu" in u2_low.split()):
+        return False
+
+    # 3. Miktar ve Hacim Uyumu (Kullanıcı Kuralı: "ürün miktarları belirtilmişse aynı olması durumunda karşılaştırma yapmak sağlıklı olacaktır")
+    b1, v1 = urun_olcu_ve_miktar_cikar(u1, m1)
+    b2, v2 = urun_olcu_ve_miktar_cikar(u2, m2)
+    if b1 and b2:
+        if b1 != b2:
+            return False
+        # %10'dan fazla miktar/hacim farkı varsa karşılaştırma yapma (örn: 200 ml vs 1000 ml engellenir)
+        if abs(v1 - v2) / max(v1, v2) > 0.10:
+            return False
+
+    # 4. KULLANICI KURALI: Ürün isimleri en az %90 benzer olmalıdır (similarity >= 0.90)
+    sim = urun_benzerlik_orani(u1, u2)
+    if sim < 0.90:
+        return False
+
+    return True
+
+def urun_gecmis_fiyat_karsilastir(urun, suanki_fiyat, suanki_firma="", suanki_miktar="", suanki_kategori="", haric_id=None, islemler_listesi=None):
+    """
+    Satın alınan ürünlerin fiyatı geçmişteki AYNI tür ve gramajdaki ürünlerle karşılaştırılır (%90 benzerlik şartı).
+    Daha ucuz ya da daha pahalı olduğu konusunda bilgilendirilir.
+    Fiyat aynı ise KESİNLİKLE hiçbir bilgilendirme yapılmaz (None döner).
+    """
+    if not urun or not suanki_fiyat:
+        return None
+    try:
+        suanki_f = float(suanki_fiyat)
+    except Exception:
+        return None
+    if suanki_f <= 0:
+        return None
+
+    if karsilastirma_engelli_mi(urun, suanki_firma, suanki_kategori):
+        return None
+
+    kaynak_islemler = islemler_listesi if islemler_listesi is not None else []
+    en_yakin_kayit = None
+
+    for it in kaynak_islemler:
+        if it.get("tur") != "Gider":
+            continue
+        it_id = it.get("id")
+        if haric_id and str(it_id) == str(haric_id):
+            continue
+
+        it_urun = str(it.get("urun") or "").strip()
+        it_firma = str(it.get("firma") or "").strip()
+        it_miktar = str(it.get("miktar") or "").strip()
+        it_kat = str(it.get("kategori") or "").strip()
+
+        if not urunler_birebir_eslesiyor_mu(urun, suanki_miktar, suanki_firma, suanki_kategori,
+                                            it_urun, it_miktar, it_firma, it_kat):
+            continue
+
+        raw_bf = it.get("birim_fiyat")
+        bf_gecmis = parse_turk_tutari(raw_bf)
+        if bf_gecmis <= 0:
+            bf_gecmis = float(it.get("tutar") or 0.0)
+
+        if bf_gecmis > 0:
+            en_yakin_kayit = {
+                "onceki_fiyat": bf_gecmis,
+                "onceki_firma": it_firma or "Bilinmeyen Market",
+                "onceki_tarih": it.get("tarih") or "",
+                "onceki_urun": it_urun
+            }
+            break
+
+    if not en_yakin_kayit:
+        return None
+
+    onceki_f = en_yakin_kayit["onceki_fiyat"]
+    # Fiyat aynı ise KESİNLİKLE bilgilendirme yapılmaz (Kullanıcı kesin kuralı)
+    if abs(suanki_f - onceki_f) < 0.05:
+        return None
+
+    fark = abs(suanki_f - onceki_f)
+    yuzde = (fark / onceki_f) * 100.0 if onceki_f > 0 else 0.0
+    onceki_fir = en_yakin_kayit["onceki_firma"]
+    ayni_firma_mi = (tr_lower(suanki_firma) == tr_lower(onceki_fir)) and bool(suanki_firma)
+
+    if suanki_f < onceki_f:
+        durum = "ucuz"
+        if ayni_firma_mi:
+            metin = f"🟢 {fark:,.2f} TL (%{yuzde:.0f}) daha ucuz! (Önceki: {onceki_f:,.2f} TL)"
+            mesaj = f"Bu ürün daha önce {onceki_fir}'den {onceki_f:,.2f} TL'ye alınmıştı. Şimdi {fark:,.2f} TL (%{yuzde:.0f}) daha ucuz!"
+        else:
+            metin = f"🟢 {fark:,.2f} TL (%{yuzde:.0f}) daha ucuz ({onceki_fir}'e göre)"
+            mesaj = f"Bu ürün {onceki_fir}'de {onceki_f:,.2f} TL idi. Burada {fark:,.2f} TL (%{yuzde:.0f}) daha ucuz!"
+    else:
+        durum = "pahali"
+        if ayni_firma_mi:
+            metin = f"🔴 {fark:,.2f} TL (%{yuzde:.0f}) daha pahalı! (Önceki: {onceki_f:,.2f} TL)"
+            mesaj = f"Bu ürün daha önce {onceki_fir}'den {onceki_f:,.2f} TL'ye alınmıştı. Şimdi {fark:,.2f} TL (%{yuzde:.0f}) zamlanmış!"
+        else:
+            metin = f"🔴 {fark:,.2f} TL (%{yuzde:.0f}) daha pahalı ({onceki_fir}'e göre)"
+            mesaj = f"Bu ürün daha önce {onceki_fir}'de {onceki_f:,.2f} TL idi. Burada {fark:,.2f} TL (%{yuzde:.0f}) daha pahalı!"
+
+    return {
+        "durum": durum,
+        "fark": fark,
+        "yuzde": yuzde,
+        "metin": metin,
+        "mesaj": mesaj,
+        "onceki_fiyat": onceki_f,
+        "onceki_firma": onceki_fir
+    }
+
+# ==============================================================================
 # Flet 1.0+ ve Eski Sürümler İçin Evrensel Uyumluluk Katmanı
 # ==============================================================================
 if not hasattr(ft, "ElevatedButton") and hasattr(ft, "Button"):
@@ -112,6 +375,30 @@ def make_padding(horizontal=0, vertical=0, left=None, right=None, top=None, bott
                 pass
         try:
             return ft.Padding(left=l, right=r, top=t, bottom=b)
+        except Exception:
+            pass
+    return max(horizontal, vertical) if (horizontal and vertical) else (horizontal or vertical)
+
+def make_margin(horizontal=0, vertical=0, left=0, right=0, top=0, bottom=0):
+    """Hem Flet 1.0 (ft.Margin) hem de tüm Flet sürümleriyle tam uyumlu margin üretir."""
+    l = left if left else horizontal
+    r = right if right else horizontal
+    t = top if top else vertical
+    b = bottom if bottom else vertical
+    if hasattr(ft, "Margin"):
+        m_cls = getattr(ft, "Margin")
+        if hasattr(m_cls, "only"):
+            try:
+                return m_cls.only(left=l, top=t, right=r, bottom=b)
+            except Exception:
+                pass
+        try:
+            return m_cls(left=l, top=t, right=r, bottom=b)
+        except Exception:
+            pass
+    if hasattr(ft, "Padding"):
+        try:
+            return ft.Padding(left=l, top=t, right=r, bottom=b)
         except Exception:
             pass
     return max(horizontal, vertical) if (horizontal and vertical) else (horizontal or vertical)
@@ -909,6 +1196,102 @@ KATEGORILER_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BA
 GELIR_TURLERI_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "gelir_turleri.json")
 BILDIRIMLER_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "bildirimler.json")
 BILDIRIM_AYARLARI_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "bildirim_ayarlari.json")
+MARKET_ESLEMELERI_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "market_eslemeleri.json")
+URUN_KATEGORI_ESLEMELERI_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "urun_kategori_eslemeleri.json")
+
+def urun_kategori_eslemeleri_oku():
+    if os.path.exists(URUN_KATEGORI_ESLEMELERI_DOSYASI):
+        try:
+            with open(URUN_KATEGORI_ESLEMELERI_DOSYASI, "r", encoding="utf-8") as f:
+                d = json.load(f)
+                if isinstance(d, dict):
+                    return d
+        except Exception:
+            pass
+    return {}
+
+def urun_kategori_eslemeleri_kaydet(mapping):
+    try:
+        with open(URUN_KATEGORI_ESLEMELERI_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump(mapping, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def ayni_urunlerin_kategorisini_guncelle(hedef_urun_adi, yeni_kategori):
+    """
+    Kullanıcı Kuralı: Bir ürünün kategorisi değiştirildiğinde o ürünle %100 aynı isimde 
+    olan tüm ürünlerin kategorisi otomatik olarak değişir.
+    """
+    if not hedef_urun_adi or not yeni_kategori:
+        return 0
+    u_norm = tr_normalize_key(hedef_urun_adi)
+    if not u_norm:
+        return 0
+
+    # 1. Kuralı kalıcı olarak json dosyasına kaydet
+    try:
+        mapping = urun_kategori_eslemeleri_oku()
+        mapping[u_norm] = yeni_kategori
+        urun_kategori_eslemeleri_kaydet(mapping)
+    except Exception:
+        pass
+
+    # 2. Geçmişteki %100 aynı isimdeki tüm kayıtları güncelle
+    guncellenen_adet = 0
+    for it in islemler:
+        it_u = it.get("urun") or ""
+        # %100 aynı isim kontrolü (büyük/küçük harf ve Türkçe karakter kayıpsız tam eşleşme)
+        if tr_normalize_key(it_u) == u_norm:
+            if it.get("kategori") != yeni_kategori:
+                it["kategori"] = yeni_kategori
+                guncellenen_adet += 1
+                if supabase and it.get("id"):
+                    try:
+                        supabase.table("islemler").update({"kategori": yeni_kategori}).eq("id", it["id"]).execute()
+                    except Exception as ex_db:
+                        print("Supabase ürün kategori toplu güncelleme hatası:", ex_db)
+
+    return guncellenen_adet
+
+def market_eslemeleri_oku():
+    if os.path.exists(MARKET_ESLEMELERI_DOSYASI):
+        try:
+            with open(MARKET_ESLEMELERI_DOSYASI, "r", encoding="utf-8") as f:
+                d = json.load(f)
+                if isinstance(d, dict):
+                    return d
+        except Exception:
+            pass
+    return {
+        "ertansa": "Halk Pazarı"
+    }
+
+def market_eslemeleri_kaydet(mapping):
+    try:
+        with open(MARKET_ESLEMELERI_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump(mapping, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def tr_normalize_key(s):
+    if not s:
+        return ""
+    return str(s).replace("İ", "i").replace("I", "ı").replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ş", "s").replace("ö", "o").replace("ç", "c").lower().strip()
+
+def market_adi_duzelt(ham_firma):
+    """Kullanıcı Kuralı: Ertansa gibi marketler otomatik olarak Halk Pazarı veya tanımlı takma adına çevrilir."""
+    if not ham_firma:
+        return "Market"
+    f_clean = str(ham_firma).strip()
+    f_norm = tr_normalize_key(f_clean)
+    mapping = market_eslemeleri_oku()
+
+    for k, v in mapping.items():
+        k_norm = tr_normalize_key(k)
+        if k_norm and (k_norm == f_norm or k_norm in f_norm):
+            return v
+
+    return f_clean
 
 def bildirim_ayarlari_oku():
     if os.path.exists(BILDIRIM_AYARLARI_DOSYASI):
@@ -962,44 +1345,50 @@ def telefon_push_bildirim_gonder(alici, baslik, mesaj, islem_turu="Gider", tutar
     Kullanıcı isteği: Abdurrahman veya Hatice sisteme işlem eklediğinde,
     uygulama açık olmasa dahi Android telefon ekranının üstünde kayar (heads-up) bildirim çıkar.
     ntfy.sh yüksek öncelikli (urgent/5) kanalı ile doğrudan Android Heads-Up bildirimi tetiklenir.
+    Hem hedef kullanıcı kanalına hem de ortak aile kanalına çift yönlü gönderilir.
     """
     import urllib.request
+    import base64
+
     ayarlar = bildirim_ayarlari_oku()
     if not ayarlar.get("telefon_bildirimleri_aktif", True):
         return False
 
     alici_temiz = "hatice" if "hatice" in str(alici).lower() else "abdurrahman"
-    topic = ayarlar.get(f"{alici_temiz}_topic") or f"evbutcesi_{alici_temiz}_bildirim"
-    url = f"https://ntfy.sh/{topic}"
+    kisisel_topic = ayarlar.get(f"{alici_temiz}_topic") or f"evbutcesi_{alici_temiz}_bildirim"
+    ortak_topic = "evbutcesi_hane_ortak_bildirim"
 
     tags = "moneybag,bell" if islem_turu == "Gelir" else "shopping_cart,bell"
     if islem_turu == "Para Aktarımı":
         tags = "incoming_envelope,bell"
 
-    # Güvenli ASCII/RFC-2047 başlık formatı
-    import base64
     b64_title = "=?utf-8?B?" + base64.b64encode(baslik.encode("utf-8")).decode("ascii") + "?="
-
     data = mesaj.encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "Title": b64_title,
-            "Priority": "urgent",  # Android'de ekranın üstünden kayan heads-up bildirimi açar
-            "Tags": tags,
-            "Click": f"https://ntfy.sh/{topic}",
-            "Content-Type": "text/plain; charset=utf-8"
-        },
-        method="POST"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            print(f"✅ Telefon kayar push bildirimi iletildi ({topic}): {resp.status}")
-            return True
-    except Exception as ex:
-        print(f"Push bildirim gönderme denemesi ({topic}):", ex)
-        return False
+
+    basarili_mi = False
+    for topic in [kisisel_topic, ortak_topic]:
+        url = f"https://ntfy.sh/{topic}"
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Title": b64_title,
+                "Priority": "urgent",  # Android'de en yüksek öncelik: ekranın üstünden kayan heads-up bildirimi açar
+                "Tags": tags,
+                "Click": f"https://ntfy.sh/{topic}",
+                "Actions": f"view, Ev Bütçesi'ni Aç, https://ntfy.sh/{topic}",
+                "Content-Type": "text/plain; charset=utf-8"
+            },
+            method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                print(f"✅ Telefon kayar push bildirimi iletildi ({topic}): {resp.status}")
+                basarili_mi = True
+        except Exception as ex:
+            print(f"Push bildirim gönderme denemesi ({topic}):", ex)
+
+    return basarili_mi
 
 def bildirim_olustur_ve_gonder(islem, gonderen=None):
     """İşlem eklendiğinde karşı tarafa hem sistem push bildirimi hem de uygulama içi bildirim iletir."""
@@ -1056,6 +1445,7 @@ VARSAYILAN_GIDER_KATEGORILERI = [
     "Kasap & Şarküteri & Manav",
     "Fırın & Unlu Mamuller",
     "Abur Cubur & Atıştırmalık",
+    "Poşet",
     "Ev & Faturalar (Elektrik, Su, Doğalgaz)",
     "Kira & Aidat",
     "İnternet, Telefon & TV",
@@ -1096,15 +1486,25 @@ VARSAYILAN_GELIR_TURLERI = [
 ]
 
 def kategoriler_oku():
+    mevcut = list(VARSAYILAN_GIDER_KATEGORILERI)
     if os.path.exists(KATEGORILER_DOSYASI):
         try:
             with open(KATEGORILER_DOSYASI, "r", encoding="utf-8") as f:
                 veriler = json.load(f)
                 if isinstance(veriler, list) and len(veriler) > 0:
-                    return veriler
+                    mevcut = veriler
         except Exception:
             pass
-    return list(VARSAYILAN_GIDER_KATEGORILERI)
+    # Kullanıcı Kuralı: Alışveriş poşetleri daima Poşet kategorisinde olmalı
+    if "Poşet" not in mevcut:
+        if "Diğer" in mevcut:
+            mevcut.remove("Diğer")
+            mevcut.append("Poşet")
+            mevcut.append("Diğer")
+        else:
+            mevcut.append("Poşet")
+        kategoriler_kaydet(mevcut)
+    return mevcut
 
 def kategoriler_kaydet(kat_listesi):
     try:
@@ -1143,6 +1543,40 @@ def kategori_ekle(yeni_kat):
             mevcut.append("Diğer")
         else:
             mevcut.append(yeni)
+        kategoriler_kaydet(mevcut)
+        GIDER_KATEGORILERI.clear()
+        GIDER_KATEGORILERI.extend(mevcut)
+        return True
+    return False
+
+def kategori_duzenle(eski_kat, yeni_kat):
+    eski = str(eski_kat).strip()
+    yeni = str(yeni_kat).strip()
+    if not eski or not yeni or eski == yeni:
+        return False
+    mevcut = kategoriler_oku()
+    if eski in mevcut:
+        idx = mevcut.index(eski)
+        mevcut[idx] = yeni
+        # Eğer "Diğer" yer değiştirdiyse en sona al
+        if "Diğer" in mevcut and mevcut[-1] != "Diğer":
+            mevcut.remove("Diğer")
+            mevcut.append("Diğer")
+        kategoriler_kaydet(mevcut)
+        GIDER_KATEGORILERI.clear()
+        GIDER_KATEGORILERI.extend(mevcut)
+        return True
+    return False
+
+def kategori_sil(silinecek_kat, hedef_kat="Diğer"):
+    silinecek = str(silinecek_kat).strip()
+    if not silinecek or silinecek == "Diğer":
+        return False
+    mevcut = kategoriler_oku()
+    if silinecek in mevcut:
+        mevcut.remove(silinecek)
+        if "Diğer" not in mevcut:
+            mevcut.append("Diğer")
         kategoriler_kaydet(mevcut)
         GIDER_KATEGORILERI.clear()
         GIDER_KATEGORILERI.extend(mevcut)
@@ -1268,6 +1702,21 @@ def kategori_akilli_duzelt(urun_adi, firma="", mevcut_kat=""):
     f = str(firma or "").lower().strip()
     m = str(mevcut_kat or "").strip()
 
+    # Kullanıcı Kuralı: Önceden kategorisi değiştirilmiş ürünlerin hafızadaki kuralı (%100 aynı isim)
+    u_norm = tr_normalize_key(urun_adi)
+    if u_norm:
+        u_map = urun_kategori_eslemeleri_oku()
+        if u_norm in u_map:
+            return u_map[u_norm]
+
+    # 0. Alışveriş Poşeti (Kullanıcı kesin kuralı: Alışveriş poşetleri daima Poşet kategorisine kaydedilsin)
+    poset_kelimeler = [
+        "poşet", "poset", "alisveris poseti", "alişveriş poşeti", "poşeti", "poseti",
+        "alisveris pos", "hışır poşet", "hisir poset", "baskılı poşet", "baskili poset", "bez çanta"
+    ]
+    if any(w in u for w in poset_kelimeler):
+        return "Poşet"
+
     # 1. Sigara & Tütün Ürünleri
     sigara_kelimeler = [
         "sigara", "tütün", "tutun", "rothmans", "winston", "marlboro", "parliament",
@@ -1352,8 +1801,16 @@ def kategori_akilli_duzelt(urun_adi, firma="", mevcut_kat=""):
         return "Giyim"
 
     # 10. Dışarıda Yemek
-    if any(w in u for w in ["döner", "kebap", "pizza", "burger", "lahmacun", "pide", "kafe", "restoran"]):
-        return "Dışarıda Yemek / Eğlence"
+    if any(w in u for w in ["döner", "kebap", "pizza", "burger", "lahmacun", "kafe", "restoran"]):
+        return "Dışarıda Yemek & Kafe & Restoran" if "Dışarıda Yemek & Kafe & Restoran" in GIDER_KATEGORILERI else "Dışarıda Yemek / Eğlence"
+
+    # 11. Fırın & Unlu Mamuller (Ekmek, simit, pide, börek veya fırın/pastane harcamaları)
+    if any(w in u for w in ["ekmek", "simit", "poğaça", "pogaca", "börek", "borek", "pide", "yufka", "lavaş", "lavas", "bazlama", "unlu mamul", "pasta"]) or any(w in f for w in ["fırın", "firin", "pastane"]):
+        return "Fırın & Unlu Mamuller"
+
+    # 12. Kasap & Şarküteri & Manav
+    if any(w in f for w in ["kasap", "manav", "şarküteri", "sarkuteri"]):
+        return "Kasap & Şarküteri & Manav"
 
     # Eğer mevcut kategori GIDER_KATEGORILERI içindeyse ve "Diğer" değilse koru, aksi halde Market
     if m in GIDER_KATEGORILERI and m != "Diğer":
@@ -1430,13 +1887,15 @@ JSON yapısı:
       "miktar": "Miktar (örn: 1 Adet, 1.5 kg, 2 Paket)",
       "birim_fiyat": 25.50,
       "tutar": 51.00,
-      "kategori": "Aşağıdaki kategorilerden en uygununu seç: 'Abur Cubur & Atıştırmalık', 'Market & Temel Gıda', 'Temizlik', 'Sigara/Tütün', 'Ev & Faturalar', 'Ulaşım / Yakıt', 'Dışarıda Yemek / Eğlence', 'Giyim', 'Sağlık', 'Eğitim & Okul', 'Evcil Hayvan (Pamuk)', 'Diğer'"
+      "kategori": "Aşağıdaki mevcut bütçe kategorilerinden en uygununu seç: " + ", ".join(f"'{k}'" for k in kategoriler_oku()) + ",
+      "oneri_kategori": "Eğer mevcut kategorilerden hiçbiri bu ürüne uymuyorsa, bu ürün için önerdiğin yeni kategori adı (örn: Kırtasiye, Oto Bakım, Bahçe vb.), aksi halde boş bırak"
     }
   ],
   "toplam_tutar": 51.00
 }
 
 KATEGORİ KURALLARI (ÇOK ÖNEMLİ):
+0. 'Poşet': Alışveriş poşetleri (ALIŞVERİŞ POŞETİ, POŞET, HIŞIR POŞET vb.) KESİNLİKLE 'Poşet' kategorisine atanmalıdır!
 1. 'Abur Cubur & Atıştırmalık': Çikolata, gofret, bisküvi, kek, cips, kraker, dondurma (golf, magnum, roko, lungo), şekerleme, sakız, kuruyemiş, gazlı içecek, meşrubat, soğuk çay, puding. (Çikolata, bisküvi, dondurma vb. tatlıları KESİNLİKLE temel gıda yapma, 'Abur Cubur & Atıştırmalık' olarak etiketle).
 2. 'Market & Temel Gıda': Ekmek, un, süt, yoğurt, peynir, yumurta, sıvı yağ, zeytin, salça, bakliyat, et, tavuk, balık, sebze, meyve, makarna, pirinç, çay, baharat.
 3. 'Temizlik': Deterjan, yumuşatıcı, bulaşık tableti/sıvısı, çamaşır suyu, şampuan, sabun, duş jeli, diş macunu/fırçası, tuvalet kağıdı, peçete, ıslak mendil, hijyenik ped, çöp torbası.
@@ -1655,21 +2114,50 @@ def parse_sozel_ifade_yerel(cumle, fiyat_hafizasi):
         else:
             tarih_str = bugun_dt.strftime("%d.%m.%Y")
 
-    # Firma tespiti
-    firmalar = [
-        ("bim", "BİM"), ("bi̇m", "BİM"), ("a101", "A101"), ("şok", "ŞOK"), ("sok", "ŞOK"),
-        ("migros", "Migros"), ("carrefour", "Carrefour"), ("düzgün", "Düzgün Market"),
-        ("tarım kredi", "Tarım Kredi"), ("tarim kredi", "Tarım Kredi"), ("pazar", "Pazar"),
-        ("fırın", "Fırın"), ("firin", "Fırın"), ("eczane", "Eczane"), ("shell", "Shell"),
-        ("opet", "Opet"), ("bp", "BP"), ("petrol", "Petrol"), ("palen", "Palen Doğalgaz"),
-        ("türk telekom", "Türk Telekom"), ("vodafone", "Vodafone"), ("turkcell", "Turkcell"),
-        ("nakit", "Nakit"), ("okul", "Okul")
-    ]
+    # Firma tespiti (Gelişmiş: 'harman fırınından' -> 'Harman Fırını' tam tespit edilir)
     bulunan_firma = "Market"
-    for k, f_ad in firmalar:
-        if k in c_lower:
-            bulunan_firma = f_ad
-            break
+
+    # 1. İki kelimeli tam işletme isimlerini yakala (örn: harman fırını, sütçü baba, özkaynak manav)
+    tam_isletme_match = re.search(r'\b([a-zA-ZçğıöşüÇĞİÖŞÜ0-9]+)\s+(fırın[ıa-z]*|market[i-z]*|manav[ıa-z]*|kasap[ıa-z]*|pastane[a-z]*|bakkal[a-z]*|petrol[a-z]*|kafe[a-z]*|lokanta[a-z]*)\b', c_lower)
+    if tam_isletme_match:
+        on_ek = tam_isletme_match.group(1).title()
+        tur_ek = tam_isletme_match.group(2)
+        if "fırın" in tur_ek or "firin" in tur_ek:
+            bulunan_firma = f"{on_ek} Fırını"
+        elif "market" in tur_ek:
+            bulunan_firma = f"{on_ek} Market"
+        elif "manav" in tur_ek:
+            bulunan_firma = f"{on_ek} Manavı"
+        elif "kasap" in tur_ek:
+            bulunan_firma = f"{on_ek} Kasabı"
+        elif "pastane" in tur_ek:
+            bulunan_firma = f"{on_ek} Pastanesi"
+        else:
+            bulunan_firma = f"{on_ek} {tur_ek.title()}"
+    else:
+        # Cümlenin başındaki ayrılma ekli kelimeyi tespit et (örn: 'harman fırınından' -> 'Harman Fırını', 'bimden' -> 'BİM')
+        ilk_kelimeler = c_lower.split()
+        if len(ilk_kelimeler) >= 2 and any(ilk_kelimeler[1].endswith(ek) for ek in ["dan", "den", "tan", "ten"]):
+            if any(k in ilk_kelimeler[1] for k in ["fırın", "firin", "market", "manav", "kasap", "bakkal"]):
+                bulunan_firma = f"{ilk_kelimeler[0].title()} {ilk_kelimeler[1].title()}"
+                bulunan_firma = re.sub(r'(dan|den|tan|ten|ından|inden|un|in|ın|ün)$', '', bulunan_firma).strip().title()
+
+        if bulunan_firma == "Market":
+            firmalar = [
+                ("harman fırın", "Harman Fırını"), ("harman firin", "Harman Fırını"),
+                ("sütçü baba", "Sütçü Baba"), ("sutcu baba", "Sütçü Baba"),
+                ("bim", "BİM"), ("bi̇m", "BİM"), ("a101", "A101"), ("şok", "ŞOK"), ("sok", "ŞOK"),
+                ("migros", "Migros"), ("carrefour", "Carrefour"), ("düzgün", "Düzgün Market"),
+                ("tarım kredi", "Tarım Kredi"), ("tarim kredi", "Tarım Kredi"), ("pazar", "Pazar"),
+                ("fırın", "Fırın"), ("firin", "Fırın"), ("eczane", "Eczane"), ("shell", "Shell"),
+                ("opet", "Opet"), ("bp", "BP"), ("petrol", "Petrol"), ("palen", "Palen Doğalgaz"),
+                ("türk telekom", "Türk Telekom"), ("vodafone", "Vodafone"), ("turkcell", "Turkcell"),
+                ("nakit", "Nakit"), ("okul", "Okul")
+            ]
+            for k, f_ad in firmalar:
+                if k in c_lower:
+                    bulunan_firma = f_ad
+                    break
 
     # Miktar tespiti
     miktar_sayi = 1.0
@@ -2018,6 +2506,21 @@ def main(page: ft.Page):
                 if res.data is not None:
                     islemler.clear()
                     islemler.extend(res.data)
+                    # Market isimlerini ve %100 aynı ürün kategorilerini otomatik normalize et
+                    try:
+                        u_map = urun_kategori_eslemeleri_oku()
+                        for it in islemler:
+                            if it.get("tur") == "Gider":
+                                if it.get("firma"):
+                                    duz = market_adi_duzelt(it["firma"])
+                                    if duz != it["firma"]:
+                                        it["firma"] = duz
+                                if u_map and it.get("urun"):
+                                    u_n = tr_normalize_key(it["urun"])
+                                    if u_n in u_map and it.get("kategori") != u_map[u_n]:
+                                        it["kategori"] = u_map[u_n]
+                    except Exception:
+                        pass
                     # Eğer veri geldiyse ve mevcut bütçe döneminde kayıt yoksa, dönemi en güncel verinin ayına taşı
                     en_yeni_tarih = None
                     for it in islemler:
@@ -2191,58 +2694,268 @@ def main(page: ft.Page):
         )
 
         # --- YENİ KATEGORİ VE GELİR TÜRÜ EKLEME MODALLARI ---
-        def yeni_kategori_dialog_ac(e=None):
+        # Kullanıcı İsteği: Kategori ekleme, kategori düzenleme ve kategori silme imkanı
+        # DÜZELTME: Listenin altındakilerin de rahatça kaydırılıp görülmesi için ft.ListView
+        # ve bağımsız kaydırma alanı (scroll container) ile altta 30px boşluk eklendi.
+        def kategori_yonetimi_modal_ac(e=None):
             dokunma_geribildirimi()
-            yeni_kat_input = ft.TextField(
-                label="Yeni Kategori Adı (Örn: Bahçe & Çiçek)",
-                autofocus=True,
-                width=280,
-                dense=True
-            )
-            kat_uyari = ft.Text("", color="red", size=12)
 
-            def kat_kaydet_aksiyon(ev):
+            # Doğrudan kaydırılabilir ve kesinlikle taşmayan ListView
+            kat_yonetim_liste = ft.ListView(spacing=6, height=310, expand=True)
+
+            yeni_kat_input = ft.TextField(
+                label="Yeni Kategori Adı",
+                hint_text="Örn: Bahçe & Çiçek",
+                width=220,
+                dense=True,
+                height=38,
+                text_size=12
+            )
+
+            kategori_arama_input = ft.TextField(
+                hint_text="🔍 Listede kategori ara...",
+                dense=True,
+                height=34,
+                text_size=11,
+                border_radius=8,
+                content_padding=make_padding(8, 4),
+                on_change=lambda _: listeyi_yenile()
+            )
+
+            kategori_sayisi_badge = ft.Text("", size=10.5, color="#2563eb", weight=ft.FontWeight.W_600)
+
+            def listeyi_yenile():
+                kat_yonetim_liste.controls.clear()
+                tum_kategoriler = kategoriler_oku()
+                arama_metni = (kategori_arama_input.value or "").strip().lower()
+
+                if arama_metni:
+                    mevcut_kategoriler = [k for k in tum_kategoriler if arama_metni in k.lower()]
+                else:
+                    mevcut_kategoriler = list(tum_kategoriler)
+
+                kategori_sayisi_badge.value = f"Toplam: {len(tum_kategoriler)} Kategori" if not arama_metni else f"Bulunan: {len(mevcut_kategoriler)}/{len(tum_kategoriler)}"
+
+                if not mevcut_kategoriler:
+                    kat_yonetim_liste.controls.append(
+                        ft.Container(
+                            content=ft.Column([
+                                ft.Icon(ft.Icons.SEARCH_OFF_ROUNDED, size=28, color="#94a3b8"),
+                                ft.Text(f"'{arama_metni}' ile eşleşen kategori bulunamadı.", size=11, color="#64748b")
+                            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4),
+                            padding=make_padding(20, 10),
+                            alignment=ft.alignment.center
+                        )
+                    )
+                else:
+                    for k_ad in mevcut_kategoriler:
+                        if k_ad == "Diğer":
+                            satir = ft.Container(
+                                content=ft.Row([
+                                    ft.Text(f"🏷️ {k_ad}", size=12, weight=ft.FontWeight.BOLD, color="#64748b", expand=True),
+                                    ft.Container(
+                                        content=ft.Text("Sabit", size=9.5, color="#64748b", weight=ft.FontWeight.W_600),
+                                        bgcolor="#f1f5f9",
+                                        border_radius=6,
+                                        padding=make_padding(6, 2)
+                                    )
+                                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                                bgcolor="#f8fafc",
+                                border=make_border_all(1, "#e2e8f0"),
+                                border_radius=8,
+                                padding=make_padding(10, 6)
+                            )
+                            kat_yonetim_liste.controls.append(satir)
+                            continue
+
+                        def duzenle_tiklandi(ev, hedef_k=k_ad):
+                            dokunma_geribildirimi()
+                            duzenle_input = ft.TextField(label="Yeni Kategori İsmi", value=hedef_k, width=280, dense=True, autofocus=True)
+
+                            def kaydet_duzenleme(ev_d):
+                                yeni_isim = duzenle_input.value.strip()
+                                if not yeni_isim or yeni_isim == hedef_k:
+                                    close_app_dialog(page, d_dialog)
+                                    return
+
+                                kategori_duzenle(hedef_k, yeni_isim)
+                                guncellenen_sayisi = 0
+                                for itm in islemler:
+                                    if itm.get("tur") == "Gider" and itm.get("kategori") == hedef_k:
+                                        itm["kategori"] = yeni_isim
+                                        guncellenen_sayisi += 1
+                                        if supabase and itm.get("id"):
+                                            try:
+                                                supabase.table("islemler").update({"kategori": yeni_isim}).eq("id", itm["id"]).execute()
+                                            except Exception:
+                                                pass
+
+                                mevcut = kategoriler_oku()
+                                gider_kategori.options = [make_option(k) for k in mevcut]
+                                if gider_kategori.value == hedef_k:
+                                    gider_kategori.value = yeni_isim
+
+                                kategori_filtre_listesi = ["Tüm Kategoriler"] + mevcut + gelir_turleri_oku()
+                                kategori_filtre_dropdown.options = [make_option(k) for k in kategori_filtre_listesi]
+                                if kategori_filtre_dropdown.value == hedef_k:
+                                    kategori_filtre_dropdown.value = yeni_isim
+
+                                close_app_dialog(page, d_dialog)
+                                dokunma_geribildirimi()
+                                show_app_snackbar(page, f"✅ '{hedef_k}' kategorisi '{yeni_isim}' olarak güncellendi! ({guncellenen_sayisi} harcama güncellendi)", color="#10b981")
+                                listeyi_yenile()
+                                arayuzu_guncelle()
+
+                            d_dialog = ft.AlertDialog(
+                                title=ft.Row([
+                                    ft.Icon(ft.Icons.EDIT_ROUNDED, color="#2563eb", size=20),
+                                    ft.Text("Kategoriyi Düzenle", size=15, weight=ft.FontWeight.BOLD)
+                                ], spacing=6),
+                                content=ft.Container(
+                                    content=ft.Column([
+                                        ft.Text(f"Mevcut İsim: {hedef_k}", size=11, color="#64748b"),
+                                        duzenle_input
+                                    ], spacing=8, tight=True),
+                                    width=300
+                                ),
+                                actions=[
+                                    make_button("İptal", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, d_dialog)),
+                                    make_button("Kaydet", height=32, bgcolor="#2563eb", color="white", on_click=kaydet_duzenleme)
+                                ],
+                                actions_alignment=ft.MainAxisAlignment.END
+                            )
+                            show_app_dialog(page, d_dialog)
+
+                        def sil_tiklandi(ev, hedef_k=k_ad):
+                            dokunma_geribildirimi()
+                            ait_harcama_sayisi = sum(1 for itm in islemler if itm.get("tur") == "Gider" and itm.get("kategori") == hedef_k)
+
+                            def onayla_sil(ev_s):
+                                kategori_sil(hedef_k, hedef_kat="Diğer")
+                                for itm in islemler:
+                                    if itm.get("tur") == "Gider" and itm.get("kategori") == hedef_k:
+                                        itm["kategori"] = "Diğer"
+                                        if supabase and itm.get("id"):
+                                            try:
+                                                supabase.table("islemler").update({"kategori": "Diğer"}).eq("id", itm["id"]).execute()
+                                            except Exception:
+                                                pass
+
+                                mevcut = kategoriler_oku()
+                                gider_kategori.options = [make_option(k) for k in mevcut]
+                                if gider_kategori.value == hedef_k:
+                                    gider_kategori.value = "Diğer"
+
+                                kategori_filtre_listesi = ["Tüm Kategoriler"] + mevcut + gelir_turleri_oku()
+                                kategori_filtre_dropdown.options = [make_option(k) for k in kategori_filtre_listesi]
+                                if kategori_filtre_dropdown.value == hedef_k:
+                                    kategori_filtre_dropdown.value = "Tüm Kategoriler"
+
+                                close_app_dialog(page, s_dialog)
+                                dokunma_geribildirimi()
+                                show_app_snackbar(page, f"🗑️ '{hedef_k}' kategorisi silindi. ({ait_harcama_sayisi} harcama 'Diğer' kategorisine aktarıldı)", color="#f59e0b")
+                                listeyi_yenile()
+                                arayuzu_guncelle()
+
+                            s_dialog = ft.AlertDialog(
+                                title=ft.Row([
+                                    ft.Icon(ft.Icons.DELETE_FOREVER_ROUNDED, color="#ef4444", size=22),
+                                    ft.Text("Kategoriyi Sil", size=15, weight=ft.FontWeight.BOLD)
+                                ], spacing=6),
+                                content=ft.Container(
+                                    content=ft.Column([
+                                        ft.Text(f"'{hedef_k}' kategorisini silmek istediğinize emin misiniz?", size=12, weight=ft.FontWeight.W_600),
+                                        ft.Text(f"Bu kategoriye ait {ait_harcama_sayisi} harcama 'Diğer' kategorisine aktarılacaktır.", size=11, color="#64748b") if ait_harcama_sayisi > 0 else ft.Text("Bu kategoriye ait herhangi bir harcama bulunmuyor.", size=11, color="#64748b")
+                                    ], spacing=6, tight=True),
+                                    width=300
+                                ),
+                                actions=[
+                                    make_button("Vazgeç", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, s_dialog)),
+                                    make_button("Sil", height=32, bgcolor="#ef4444", color="white", on_click=onayla_sil)
+                                ],
+                                actions_alignment=ft.MainAxisAlignment.END
+                            )
+                            show_app_dialog(page, s_dialog)
+
+                        satir = ft.Container(
+                            content=ft.Row([
+                                ft.Text(f"🏷️ {k_ad}", size=12, weight=ft.FontWeight.W_600, color="#1e293b", expand=True),
+                                ft.Row([
+                                    ft.IconButton(ft.Icons.EDIT_ROUNDED, icon_size=18, icon_color="#2563eb", tooltip="Kategori İsmini Düzenle", on_click=duzenle_tiklandi),
+                                    ft.IconButton(ft.Icons.DELETE_OUTLINE_ROUNDED, icon_size=18, icon_color="#ef4444", tooltip="Kategoriyi Sil", on_click=sil_tiklandi)
+                                ], spacing=2)
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            bgcolor="#f8fafc",
+                            border=make_border_all(1, "#e2e8f0"),
+                            border_radius=8,
+                            padding=make_padding(8, 4)
+                        )
+                        kat_yonetim_liste.controls.append(satir)
+
+                    # Listenin en altındaki elemanın butonlar altında kalmaması için ferah alt boşluk
+                    kat_yonetim_liste.controls.append(ft.Container(height=35))
+
+                try:
+                    yonetim_dialog.update()
+                except Exception:
+                    pass
+
+            def yeni_ekle_aksiyon(ev):
                 val = yeni_kat_input.value.strip()
                 if not val:
-                    kat_uyari.value = "Lütfen bir kategori adı giriniz."
+                    return
+                eklendi = kategori_ekle(val)
+                if eklendi:
+                    yeni_kat_input.value = ""
+                    mevcut = kategoriler_oku()
+                    gider_kategori.options = [make_option(k) for k in mevcut]
+                    gider_kategori.value = val
+                    kategori_filtre_listesi = ["Tüm Kategoriler"] + mevcut + gelir_turleri_oku()
+                    kategori_filtre_dropdown.options = [make_option(k) for k in kategori_filtre_listesi]
+                    show_app_snackbar(page, f"✅ '{val}' kategorisi başarıyla eklendi!", color="#10b981")
+                    listeyi_yenile()
                     try:
                         page.update()
                     except Exception:
                         pass
-                    return
-                kategori_ekle(val)
-                mevcut = kategoriler_oku()
-                gider_kategori.options = [make_option(k) for k in mevcut]
-                gider_kategori.value = val
 
-                # Kategori filtre dropdown'ını da güncelle
-                kategori_filtre_listesi = ["Tüm Kategoriler"] + mevcut + gelir_turleri_oku()
-                kategori_filtre_dropdown.options = [make_option(k) for k in kategori_filtre_listesi]
-
-                close_app_dialog(page, kat_dialog)
-                dokunma_geribildirimi()
-                show_app_snackbar(page, f"✅ Yeni kategori eklendi: {val}", color="#10b981")
-                try:
-                    page.update()
-                except Exception:
-                    pass
-
-            kat_dialog = ft.AlertDialog(
+            yonetim_dialog = ft.AlertDialog(
                 title=ft.Row([
                     ft.Icon(ft.Icons.CATEGORY_ROUNDED, color="#2563eb", size=22),
-                    ft.Text("Yeni Kategori Ekle", size=16, weight=ft.FontWeight.BOLD)
+                    ft.Text("Kategori Yönetimi (Ekle / Düzenle / Sil)", size=15, weight=ft.FontWeight.BOLD)
                 ], spacing=8),
-                content=ft.Column([
-                    ft.Text("Harcamalarınız için yeni bir kategori tanımlayın:", size=11, color="#64748b"),
-                    yeni_kat_input,
-                    kat_uyari
-                ], tight=True, spacing=10),
+                content=ft.Container(
+                    content=ft.Column([
+                        # Üst Kategori Ekleme Çubuğu
+                        ft.Row([
+                            yeni_kat_input,
+                            make_button("➕ Ekle", height=38, bgcolor="#2563eb", color="white", on_click=yeni_ekle_aksiyon)
+                        ], spacing=6, alignment=ft.MainAxisAlignment.CENTER),
+                        kategori_arama_input,
+                        ft.Divider(height=2, color="#e2e8f0"),
+                        ft.Row([
+                            ft.Text("Harcama Kategorileri:", size=11, color="#64748b", weight=ft.FontWeight.W_600),
+                            kategori_sayisi_badge
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        # Bounded ve tam kaydırılabilir liste alanı
+                        ft.Container(
+                            content=kat_yonetim_liste,
+                            height=320,
+                            expand=True
+                        )
+                    ], spacing=6, tight=True),
+                    width=330,
+                    height=450
+                ),
                 actions=[
-                    make_button("İptal", outlined=True, height=32, on_click=lambda _: close_app_dialog(page, kat_dialog)),
-                    make_button("Ekle", bgcolor="#2563eb", color="white", height=32, on_click=kat_kaydet_aksiyon)
-                ]
+                    make_button("✕ Kapat", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, yonetim_dialog))
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
             )
-            show_app_dialog(page, kat_dialog)
+            listeyi_yenile()
+            show_app_dialog(page, yonetim_dialog)
+
+        yeni_kategori_dialog_ac = kategori_yonetimi_modal_ac
 
         def yeni_gelir_turu_dialog_ac(e=None):
             dokunma_geribildirimi()
@@ -3435,7 +4148,7 @@ def main(page: ft.Page):
 
                     for f_idx, f_item in enumerate(tum_sonuclar):
                         f_veri = f_item["veri"]
-                        f_firma = f_veri.get("firma") or "Market"
+                        f_firma = market_adi_duzelt(f_veri.get("firma") or "Market")
                         f_tarih = standart_tarih_yap(f_veri.get("tarih"))
                         f_saat = str(f_veri.get("saat") or "12:00").strip()[:5]
                         f_urunler = f_veri.get("urunler") or []
@@ -3486,10 +4199,65 @@ def main(page: ft.Page):
 
                             chk = ft.Checkbox(
                                 value=chk_val,
-                                label=f"{rozet}{u_adi} ({u_miktar}) - {u_tutar:,.2f} TL • [{u_kat}]"
+                                label=f"{rozet}{u_adi} ({u_miktar}) - {u_tutar:,.2f} TL"
+                            )
+
+                            mevcut_katlar = kategoriler_oku()
+                            if u_kat not in mevcut_katlar:
+                                mevcut_katlar.insert(0, u_kat)
+
+                            kat_dd = make_dropdown(
+                                options=mevcut_katlar,
+                                value=u_kat,
+                                width=175,
+                                dense=True
+                            )
+
+                            # Kategori önerisi kontrolü
+                            oneri_kategori_adi = str(u.get("oneri_kategori") or "").strip()
+                            oneri_btn = None
+                            if oneri_kategori_adi and oneri_kategori_adi not in mevcut_katlar:
+                                def oneri_kategori_ekle_aksiyon(ev, o_kat=oneri_kategori_adi, target_dd=kat_dd):
+                                    dokunma_geribildirimi()
+                                    kategori_ekle(o_kat)
+                                    target_dd.options = [make_option(k) for k in kategoriler_oku()]
+                                    target_dd.value = o_kat
+                                    show_app_snackbar(page, f"✅ '{o_kat}' kategorisi eklendi ve seçildi!", color="#10b981")
+                                    try:
+                                        target_dd.update()
+                                    except Exception:
+                                        pass
+
+                                oneri_btn = ft.Container(
+                                    content=ft.Row([
+                                        ft.Icon(ft.Icons.LIGHTBULB_ROUNDED, size=13, color="#b45309"),
+                                        ft.Text(f"💡 '{oneri_kategori_adi}' Ekle", size=10, color="#b45309", weight=ft.FontWeight.BOLD)
+                                    ], spacing=2),
+                                    bgcolor="#fef3c7",
+                                    border=make_border_all(1, "#fde68a"),
+                                    border_radius=6,
+                                    padding=make_padding(6, 2),
+                                    tooltip=f"'{oneri_kategori_adi}' kategorisini uygulamaya ekle ve bu ürüne ata",
+                                    on_click=oneri_kategori_ekle_aksiyon
+                                )
+
+                            urun_satiri = ft.Container(
+                                content=ft.Column([
+                                    chk,
+                                    ft.Row([
+                                        ft.Text("Kategori:", size=10.5, color="#64748b", weight=ft.FontWeight.W_500),
+                                        kat_dd,
+                                        oneri_btn if oneri_btn else ft.Container()
+                                    ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                                ], spacing=2),
+                                bgcolor="#ffffff" if not zaten_kayitli else "#fff1f2",
+                                border=make_border_all(1, "#e2e8f0" if not zaten_kayitli else "#fecaca"),
+                                border_radius=8,
+                                padding=make_padding(6, 4)
                             )
 
                             toplu_onay_verileri.append({
+                                "f_idx": f_idx,
                                 "chk": chk,
                                 "firma": f_firma,
                                 "tarih": f_tarih,
@@ -3499,15 +4267,103 @@ def main(page: ft.Page):
                                 "birim_fiyat": u_fiyat,
                                 "tutar": u_tutar,
                                 "kategori": u_kat,
+                                "kat_dd": kat_dd,
                                 "mukerrer": zaten_kayitli
                             })
-                            fis_urun_kontrolleri.append(chk)
+                            fis_urun_kontrolleri.append(urun_satiri)
 
                         bu_fis_tam_mukerrer = (f_mukerrer_sayisi == len(f_urunler) and len(f_urunler) > 0)
                         if bu_fis_tam_mukerrer:
                             tam_mukerrer_fis_sayisi += 1
 
-                        # Fiş kartı başlığı ve ürünleri
+                        # Fiş kartı başlığı ve ürünleri (Kullanıcı İsteği: Market ismini değiştirme ve geçmiş/gelecek kayıtları bağlama seçeneği)
+                        f_firma_aktif = [f_firma]
+                        firma_baslik_txt = ft.Text(f"🧾 {f_firma_aktif[0]}", size=12, weight=ft.FontWeight.BOLD, color="#1e293b")
+
+                        def market_ismi_degistir_modal_ac(ev, aktif_f=f_firma_aktif, tf_txt=firma_baslik_txt, onay_verileri=toplu_onay_verileri, f_idx_local=f_idx):
+                            dokunma_geribildirimi()
+                            mevcut_f_val = aktif_f[0]
+                            yeni_market_tf = ft.TextField(
+                                label="Market / Firma Adı",
+                                value=mevcut_f_val,
+                                width=280,
+                                dense=True,
+                                autofocus=True
+                            )
+                            gecmis_dahil_chk = ft.Checkbox(
+                                value=True,
+                                label=f"Geçmişteki ve gelecekteki tüm '{mevcut_f_val}' kayıtlarını da güncelle"
+                            )
+
+                            def kaydet_market_ismi(ev_k):
+                                yeni_f_val = yeni_market_tf.value.strip()
+                                if not yeni_f_val or yeni_f_val == mevcut_f_val:
+                                    close_app_dialog(page, md_dialog)
+                                    return
+
+                                aktif_f[0] = yeni_f_val
+                                tf_txt.value = f"🧾 {yeni_f_val}"
+
+                                # 1. Bu fişteki ürünlerin firma adını güncelle
+                                for itm in onay_verileri:
+                                    if itm.get("f_idx") == f_idx_local:
+                                        itm["firma"] = yeni_f_val
+
+                                # 2. Bundan sonraki tüm fiş taramaları için hafızaya kaydet
+                                mapping = market_eslemeleri_oku()
+                                mapping[tr_lower(mevcut_f_val)] = yeni_f_val
+                                market_eslemeleri_kaydet(mapping)
+
+                                # 3. Kullanıcı Kuralı: Bundan önceki tüm kayıtları da güncelle
+                                guncellenen_gecmis = 0
+                                if gecmis_dahil_chk.value:
+                                    mevcut_f_low = tr_lower(mevcut_f_val)
+                                    for it in islemler:
+                                        it_fir = it.get("firma") or ""
+                                        if tr_lower(it_fir) == mevcut_f_low or (len(mevcut_f_low) >= 4 and mevcut_f_low in tr_lower(it_fir)):
+                                            it["firma"] = yeni_f_val
+                                            guncellenen_gecmis += 1
+                                            if supabase and it.get("id"):
+                                                try:
+                                                    supabase.table("islemler").update({"firma": yeni_f_val}).eq("id", it["id"]).execute()
+                                                except Exception:
+                                                    pass
+
+                                close_app_dialog(page, md_dialog)
+                                dokunma_geribildirimi()
+                                try:
+                                    toplu_fis_dialog.update()
+                                    page.update()
+                                except Exception:
+                                    pass
+
+                                msg = f"✅ Market ismi '{yeni_f_val}' olarak ayarlandı!"
+                                if guncellenen_gecmis > 0:
+                                    msg += f" (Geçmişteki {guncellenen_gecmis} kayıt da güncellendi)"
+                                show_app_snackbar(page, msg, color="#10b981")
+                                arayuzu_guncelle()
+
+                            md_dialog = ft.AlertDialog(
+                                title=ft.Row([
+                                    ft.Icon(ft.Icons.STOREFRONT_ROUNDED, color="#2563eb", size=22),
+                                    ft.Text("Market İsmini Değiştir", size=15, weight=ft.FontWeight.BOLD)
+                                ], spacing=6),
+                                content=ft.Container(
+                                    content=ft.Column([
+                                        ft.Text(f"Fişte okunan market: {mevcut_f_val}", size=11, color="#64748b"),
+                                        yeni_market_tf,
+                                        gecmis_dahil_chk
+                                    ], spacing=10, tight=True),
+                                    width=300
+                                ),
+                                actions=[
+                                    make_button("İptal", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, md_dialog)),
+                                    make_button("Kaydet ve Uygula", height=32, bgcolor="#2563eb", color="white", on_click=kaydet_market_ismi)
+                                ],
+                                actions_alignment=ft.MainAxisAlignment.END
+                            )
+                            show_app_dialog(page, md_dialog)
+
                         fis_durum_rozet = "⚠️ TÜMÜ ZATEN KAYITLI" if bu_fis_tam_mukerrer else (f"⚠️ {f_mukerrer_sayisi} Mükerrer" if f_mukerrer_sayisi > 0 else "✨ Tüm Ürünler Yeni")
                         fis_rozet_bg = "#fef2f2" if bu_fis_tam_mukerrer else ("#fffbeb" if f_mukerrer_sayisi > 0 else "#ecfdf5")
                         fis_rozet_color = "#b91c1c" if bu_fis_tam_mukerrer else ("#b45309" if f_mukerrer_sayisi > 0 else "#047857")
@@ -3516,7 +4372,16 @@ def main(page: ft.Page):
                             content=ft.Column([
                                 ft.Row([
                                     ft.Column([
-                                        ft.Text(f"🧾 {f_firma}", size=12, weight=ft.FontWeight.BOLD, color="#1e293b"),
+                                        ft.Row([
+                                            firma_baslik_txt,
+                                            ft.IconButton(
+                                                ft.Icons.EDIT_ROUNDED,
+                                                icon_size=16,
+                                                icon_color="#2563eb",
+                                                tooltip="Market İsmini Değiştir",
+                                                on_click=market_ismi_degistir_modal_ac
+                                            )
+                                        ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                                         ft.Text(f"📅 {f_tarih} 🕒 {f_saat} • {f_toplam:,.2f} TL", size=10, color="#64748b")
                                     ], spacing=1, expand=True),
                                     ft.Container(
@@ -3547,6 +4412,7 @@ def main(page: ft.Page):
                         for itm_idx, itm in enumerate(toplu_onay_verileri):
                             if itm["chk"].value:
                                 std_tar = itm["tarih"]
+                                secili_kat_val = itm["kat_dd"].value if "kat_dd" in itm and hasattr(itm["kat_dd"], "value") else itm["kategori"]
                                 yeni_kayit = {
                                     "kullanici": harcayan_hesap,
                                     "tur": "Gider",
@@ -3557,10 +4423,11 @@ def main(page: ft.Page):
                                     "aciklama": f"AI Toplu Fiş ({itm['firma']})",
                                     "firma": itm["firma"],
                                     "urun": itm["urun"],
-                                    "kategori": itm["kategori"],
+                                    "kategori": secili_kat_val,
                                     "miktar": itm["miktar"],
                                     "birim_fiyat": itm["birim_fiyat"],
-                                    "tutar": itm["tutar"]
+                                    "tutar": itm["tutar"],
+                                    "eklenme_ts": int(time.time())
                                 }
 
                                 if supabase:
@@ -4586,6 +5453,7 @@ def main(page: ft.Page):
                     dense=True
                 )
                 duzenle_firma = ft.TextField(label="Firma / Market", value=item.get("firma", ""), width=310, dense=True)
+                duzenle_market_tumu_chk = ft.Checkbox(label="Bu market ismini tüm geçmiş ve gelecek işlemlerde güncelle", value=True)
                 duzenle_urun = ft.TextField(label="Ürün / Hizmet", value=item.get("urun", ""), width=310, dense=True)
                 duzenle_kat = make_dropdown(options=kat_secenekleri, value=mevcut_kat, label="Kategori", width=310, dense=True)
                 duzenle_miktar = ft.TextField(label="Miktar", value=item.get("miktar", ""), width=150, dense=True)
@@ -4693,6 +5561,7 @@ def main(page: ft.Page):
                 form_kontrolleri = [
                     duzenle_hesap,
                     duzenle_firma,
+                    duzenle_market_tumu_chk,
                     duzenle_urun,
                     duzenle_kat,
                     ft.Row([duzenle_miktar, duzenle_birim_fiyat], spacing=10),
@@ -4745,15 +5614,45 @@ def main(page: ft.Page):
                 item["saat"] = yeni_saat
 
                 if tur == "Gider":
+                    eski_firma_val = (item.get("firma") or "").strip()
+                    yeni_firma_val = duzenle_firma.value.strip()
+                    eski_kat_val = (item.get("kategori") or "").strip()
+                    yeni_kat_val = (duzenle_kat.value or "Diğer").strip()
                     item["kullanici"] = duzenle_hesap.value
-                    item["firma"] = duzenle_firma.value.strip()
-                    item["urun"] = duzenle_urun.value.strip()
-                    item["kategori"] = duzenle_kat.value or "Diğer"
+                    item["firma"] = yeni_firma_val
+                    yeni_urun_val = duzenle_urun.value.strip()
+                    item["urun"] = yeni_urun_val
+                    item["kategori"] = yeni_kat_val
                     item["miktar"] = duzenle_miktar.value.strip()
+
+                    # Kullanıcı Kuralı: Bir ürünün kategorisi değiştirildiğinde o ürünle %100 aynı isimde olan tüm ürünlerin kategorisi otomatik olarak değişsin
+                    guncellenen_ayni_urun = 0
+                    if eski_kat_val != yeni_kat_val and yeni_urun_val:
+                        guncellenen_ayni_urun = ayni_urunlerin_kategorisini_guncelle(yeni_urun_val, yeni_kat_val)
                     try:
                         item["birim_fiyat"] = float(str(duzenle_birim_fiyat.value).replace(",", "."))
                     except Exception:
                         pass
+
+                    # Kullanıcı Kuralı: Market ismi değiştiyse ve onaylandıysa geçmişi güncelle ve kuralı hafızaya yaz
+                    if duzenle_market_tumu_chk.value and eski_firma_val and yeni_firma_val and tr_lower(eski_firma_val) != tr_lower(yeni_firma_val):
+                        try:
+                            mapping = market_eslemeleri_oku()
+                            mapping[tr_lower(eski_firma_val)] = yeni_firma_val
+                            market_eslemeleri_kaydet(mapping)
+
+                            eski_f_low = tr_lower(eski_firma_val)
+                            for it in islemler:
+                                it_fir = it.get("firma") or ""
+                                if tr_lower(it_fir) == eski_f_low or (len(eski_f_low) >= 4 and eski_f_low in tr_lower(it_fir)):
+                                    it["firma"] = yeni_firma_val
+                                    if supabase and it.get("id"):
+                                        try:
+                                            supabase.table("islemler").update({"firma": yeni_firma_val}).eq("id", it["id"]).execute()
+                                        except Exception:
+                                            pass
+                        except Exception as m_err:
+                            print("Market düzenleme toplu güncelleme hatası:", m_err)
                 elif tur == "Gelir":
                     item["kaynak"] = duzenle_kaynak.value.strip()
                     item["gelir_turu"] = duzenle_gelir_turu.value or "Diğer"
@@ -4770,7 +5669,10 @@ def main(page: ft.Page):
 
                 close_app_dialog(page, duzenle_dialog)
                 arayuzu_guncelle()
-                show_app_snackbar(page, "✅ İşlem başarıyla güncellendi!", color="#16a34a")
+                msg = "✅ İşlem başarıyla güncellendi!"
+                if tur == "Gider" and 'guncellenen_ayni_urun' in locals() and guncellenen_ayni_urun > 0:
+                    msg += f" (Aynı isimdeki {guncellenen_ayni_urun} ürünün de kategorisi '{yeni_kat_val}' yapıldı)"
+                show_app_snackbar(page, msg, color="#16a34a")
 
             duzenle_dialog = ft.AlertDialog(
                 title=ft.Text(f"✏️ İşlemi Düzenle ({tur})", size=15, weight=ft.FontWeight.BOLD),
@@ -4900,10 +5802,123 @@ def main(page: ft.Page):
                     kategori_toplam_tutar += tutar
                     kategori_islem_sayisi += 1
 
+                # 3. Kullanıcı İsteği: Canlı Ürün ve Market Arama Filtresi
+                arama_metni = (arama_input.value or "").strip()
+                if arama_metni:
+                    a_norm = tr_normalize_key(arama_metni)
+                    i_urun = tr_normalize_key(item.get("urun") or "")
+                    i_firma = tr_normalize_key(item.get("firma") or "")
+                    i_kaynak = tr_normalize_key(item.get("kaynak") or "")
+                    i_aciklama = tr_normalize_key(item.get("aciklama") or "")
+                    i_kat = tr_normalize_key(item.get("kategori") or "")
+                    if not (a_norm in i_urun or a_norm in i_firma or a_norm in i_kaynak or a_norm in i_aciklama or a_norm in i_kat):
+                        continue
+
                 donem_islemleri.append(item)
 
             # Tarih ve Saate göre tam kronolojik sıralama (Gelir + Gider bir arada)
             donem_islemleri.sort(key=islem_siralama_anahtari, reverse=siralama_en_yeni[0])
+
+            # Kullanıcı İsteği: Arama yapıldığında "En Son Ne Zaman Alındı?" özet bilgi kartı
+            arama_metni = (arama_input.value or "").strip()
+            if arama_metni:
+                a_norm = tr_normalize_key(arama_metni)
+                # Tüm zamanlardaki eşleşmeleri bul (böylece aranan ürün geçmişte ne zaman alındıysa görünsün)
+                tum_eslesmeler = []
+                for itm in islemler:
+                    i_u = tr_normalize_key(itm.get("urun") or "")
+                    i_f = tr_normalize_key(itm.get("firma") or "")
+                    i_k = tr_normalize_key(itm.get("kaynak") or "")
+                    i_a = tr_normalize_key(itm.get("aciklama") or "")
+                    i_kt = tr_normalize_key(itm.get("kategori") or "")
+                    if a_norm in i_u or a_norm in i_f or a_norm in i_k or a_norm in i_a or a_norm in i_kt:
+                        tum_eslesmeler.append(itm)
+
+                tum_eslesmeler.sort(key=islem_siralama_anahtari, reverse=True)
+
+                if tum_eslesmeler:
+                    en_son = tum_eslesmeler[0]
+                    es_tarih = en_son.get("tarih") or ""
+                    es_saat = en_son.get("saat") or ""
+                    es_firma = en_son.get("firma") or en_son.get("kaynak") or "Market"
+                    es_urun = en_son.get("urun") or en_son.get("aciklama") or "Ürün"
+                    es_tutar = float(en_son.get("tutar") or 0.0)
+                    es_mik = en_son.get("miktar") or ""
+                    es_bf = en_son.get("birim_fiyat") or ""
+                    es_kullanici = en_son.get("kullanici") or "Abdurrahman"
+
+                    # Kaç gün önce alındığını hesapla
+                    gun_fark_metni = ""
+                    d_obj = stringden_tarih_al(es_tarih)
+                    if d_obj:
+                        bugun = datetime.date.today()
+                        fark_gun = (bugun - d_obj).days
+                        if fark_gun == 0:
+                            gun_fark_metni = "Bugün"
+                        elif fark_gun == 1:
+                            gun_fark_metni = "Dün"
+                        elif fark_gun > 1:
+                            gun_fark_metni = f"{fark_gun} gün önce"
+                        elif fark_gun < 0:
+                            gun_fark_metni = f"İleri tarih ({es_tarih})"
+
+                    fiyat_detayi = f"{es_tutar:,.2f} TL"
+                    if es_mik:
+                        fiyat_detayi += f" ({es_mik}"
+                        if es_bf and str(es_bf) != "-":
+                            fiyat_detayi += f" x {es_bf} TL"
+                        fiyat_detayi += ")"
+
+                    toplam_harcanan = sum(float(x.get("tutar") or 0.0) for x in tum_eslesmeler)
+
+                    def tum_zamanlari_ac_aksiyon(ev):
+                        tum_zamanlar_modu[0] = True
+                        arayuzu_guncelle()
+
+                    arama_ozet_karti = ft.Container(
+                        content=ft.Column([
+                            ft.Row([
+                                ft.Row([
+                                    ft.Icon(ft.Icons.HISTORY_ROUNDED, color="#2563eb", size=18),
+                                    ft.Text("📌 En Son Satın Alım Bilgisi", size=12, weight=ft.FontWeight.BOLD, color="#1e40af"),
+                                ], spacing=4),
+                                ft.Container(
+                                    content=ft.Text(f"⏱️ {gun_fark_metni}", size=10, weight=ft.FontWeight.BOLD, color="#1e40af"),
+                                    bgcolor="#dbeafe",
+                                    border_radius=6,
+                                    padding=make_padding(6, 2)
+                                ) if gun_fark_metni else ft.Container()
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            ft.Row([
+                                ft.Text(f"🛒 {es_firma} • {es_urun}", size=12, weight=ft.FontWeight.BOLD, color="#0f172a"),
+                                ft.Text(fiyat_detayi, size=11.5, weight=ft.FontWeight.BOLD, color="#b91c1c")
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            ft.Row([
+                                ft.Text(f"📅 {es_tarih} {es_saat} • 👤 {es_kullanici}", size=10.5, color="#64748b"),
+                                ft.Text(f"Toplam {len(tum_eslesmeler)} kez alındı ({toplam_harcanan:,.2f} TL)", size=10.5, color="#2563eb", weight=ft.FontWeight.W_600)
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            make_button(
+                                f"🌐 Tüm Zamanlardaki {len(tum_eslesmeler)} Kaydı Gör",
+                                height=26,
+                                outlined=True,
+                                on_click=tum_zamanlari_ac_aksiyon
+                            ) if not tum_zamanlar_modu[0] and len(tum_eslesmeler) > len(donem_islemleri) else ft.Container(height=0)
+                        ], spacing=4),
+                        bgcolor="#eff6ff",
+                        border=make_border_all(1.5, "#93c5fd"),
+                        border_radius=10,
+                        padding=make_padding(10, 8),
+                        margin=make_margin(bottom=6)
+                    )
+                    liste_arayuzu.controls.append(arama_ozet_karti)
+                else:
+                    liste_arayuzu.controls.append(
+                        ft.Container(
+                            content=ft.Text(f"🔍 '{arama_metni}' ile eşleşen geçmiş işlem bulunamadı.", size=11, color="#64748b", italic=True),
+                            padding=8,
+                            alignment=get_alignment_center()
+                        )
+                    )
 
             gosterilen_sayisi = 0
             for item in donem_islemleri:
@@ -5025,6 +6040,59 @@ def main(page: ft.Page):
                         )
                     )
 
+                # Kullanıcı İsteği: Yeni eklenen işlemler 2 saat boyunca farklı bir renk/görünüm ile belirtilsin (eski tarihli olsa bile)
+                suanki_ts = int(time.time())
+                item_eklenme_ts = item.get("eklenme_ts")
+                yeni_eklendi_mi = False
+                if item_eklenme_ts and isinstance(item_eklenme_ts, (int, float)):
+                    fark_sn = suanki_ts - item_eklenme_ts
+                    if 0 <= fark_sn <= 7200:  # 2 saat = 7200 saniye
+                        yeni_eklendi_mi = True
+
+                if yeni_eklendi_mi:
+                    alt_etiketler.insert(0,
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.AUTO_AWESOME_ROUNDED, size=11, color="#047857"),
+                                ft.Text("✨ Yeni Eklendi", size=9.5, color="#047857", weight=ft.FontWeight.BOLD)
+                            ], spacing=2),
+                            bgcolor="#d1fae5",
+                            border=make_border_all(1, "#6ee7b7"),
+                            border_radius=6,
+                            padding=make_padding(4, 2)
+                        )
+                    )
+
+                # Kullanıcı İsteği: Satın alınan ürünlerin fiyatı geçmiş aynı ürünlerle karşılaştırılsın
+                # Aynı veya farklı markette daha ucuz veya daha pahalıysa bilgilendirme yapılsın, aynıysa bilgilendirme yapılmasın
+                if islem_turu_val == "Gider" and bf_float > 0 and urun_adi:
+                    fiyat_karsilastirma = urun_gecmis_fiyat_karsilastir(
+                        urun=urun_adi,
+                        suanki_fiyat=bf_float,
+                        suanki_firma=firma_adi,
+                        suanki_miktar=miktar_val_str,
+                        suanki_kategori=kat_adi,
+                        haric_id=item.get("id"),
+                        islemler_listesi=islemler
+                    )
+                    if fiyat_karsilastirma:
+                        badge_bg = "#dcfce7" if fiyat_karsilastirma["durum"] == "ucuz" else "#fee2e2"
+                        badge_color = "#15803d" if fiyat_karsilastirma["durum"] == "ucuz" else "#b91c1c"
+                        badge_border = "#bbf7d0" if fiyat_karsilastirma["durum"] == "ucuz" else "#fecaca"
+                        alt_etiketler.append(
+                            ft.Container(
+                                content=ft.Text(fiyat_karsilastirma["metin"], size=9.5, color=badge_color, weight=ft.FontWeight.W_600),
+                                bgcolor=badge_bg,
+                                border=make_border_all(1, badge_border),
+                                border_radius=6,
+                                padding=make_padding(4, 2),
+                                tooltip=fiyat_karsilastirma["mesaj"]
+                            )
+                        )
+
+                kart_arkaplan = "#f0fdf4" if yeni_eklendi_mi else "#f8fafc"
+                kart_cerceve = make_border_all(1.5, "#10b981") if yeni_eklendi_mi else make_border_all(1, "#f1f5f9")
+
                 satir = ft.Container(
                     content=ft.Row([
                         ft.Row([
@@ -5049,8 +6117,8 @@ def main(page: ft.Page):
                         ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.END)
                     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.START),
                     padding=make_padding(8, 6),
-                    bgcolor="#f8fafc",
-                    border=make_border_all(1, "#f1f5f9"),
+                    bgcolor=kart_arkaplan,
+                    border=kart_cerceve,
                     border_radius=10,
                 )
                 liste_arayuzu.controls.append(satir)
@@ -5188,6 +6256,7 @@ def main(page: ft.Page):
                     page.update()
                     return
 
+                suanki_ts = int(time.time())
                 yeni_kayit = {
                     "kullanici": kullanici,
                     "tur": "Gelir",
@@ -5201,7 +6270,8 @@ def main(page: ft.Page):
                     "kategori": "Gelir",
                     "miktar": "",
                     "birim_fiyat": "",
-                    "tutar": tutar_val
+                    "tutar": tutar_val,
+                    "eklenme_ts": suanki_ts
                 }
 
                 if supabase:
@@ -5235,6 +6305,7 @@ def main(page: ft.Page):
                     page.update()
                     return
 
+                suanki_ts = int(time.time())
                 yeni_kayit = {
                     "kullanici": kullanici,
                     "tur": "Para Aktarımı",
@@ -5248,7 +6319,8 @@ def main(page: ft.Page):
                     "kategori": "Para Aktarımı",
                     "miktar": "",
                     "birim_fiyat": "",
-                    "tutar": tutar_val
+                    "tutar": tutar_val,
+                    "eklenme_ts": suanki_ts
                 }
 
                 if supabase:
@@ -5306,6 +6378,8 @@ def main(page: ft.Page):
 
                 secilen_hesap = "Hatice" if "Hatice" in (gider_hesap_secimi.value or "") or "Aile Üyesi" in (gider_hesap_secimi.value or "") else "Abdurrahman"
 
+                suanki_ts = int(time.time())
+                gider_kat_adi = "Poşet" if any(w in urun_val.lower() for w in ["poşet", "poset"]) else gider_kategori.value
                 yeni_kayit = {
                     "kullanici": secilen_hesap,
                     "tur": "Gider",
@@ -5316,10 +6390,11 @@ def main(page: ft.Page):
                     "aciklama": "",
                     "firma": firma_val,
                     "urun": urun_val,
-                    "kategori": gider_kategori.value,
+                    "kategori": gider_kat_adi,
                     "miktar": miktar_tam_metin,
                     "birim_fiyat": gider_birim_fiyat.value.strip(),
-                    "tutar": toplam_tutar_val
+                    "tutar": toplam_tutar_val,
+                    "eklenme_ts": suanki_ts
                 }
 
                 if supabase:
@@ -5332,6 +6407,25 @@ def main(page: ft.Page):
 
                 islemler.insert(0, yeni_kayit)
                 bildirim_olustur_ve_gonder(yeni_kayit, gonderen=kullanici)
+
+                # Fiyat Karşılaştırması Bilgilendirmesi (Ucuz veya Pahalıysa göster, aynıysa gösterme)
+                try:
+                    bf_flt_kars = parse_turk_tutari(yeni_kayit.get("birim_fiyat")) or float(yeni_kayit.get("tutar") or 0.0)
+                    f_kars = urun_gecmis_fiyat_karsilastir(
+                        urun=yeni_kayit.get("urun"),
+                        suanki_fiyat=bf_flt_kars,
+                        suanki_firma=yeni_kayit.get("firma"),
+                        haric_id=yeni_kayit.get("id"),
+                        islemler_listesi=islemler[1:]
+                    )
+                    if f_kars:
+                        show_app_snackbar(
+                            page,
+                            f_kars["mesaj"],
+                            color="#10b981" if f_kars["durum"] == "ucuz" else "#ef4444"
+                        )
+                except Exception:
+                    pass
 
                 gider_firma.value = ""
                 gider_urun.value = ""
@@ -5427,6 +6521,21 @@ def main(page: ft.Page):
                         onceki_adet = len(islemler)
                         islemler.clear()
                         islemler.extend(res.data)
+                    # Market isimlerini ve %100 aynı ürün kategorilerini otomatik normalize et
+                    try:
+                        u_map = urun_kategori_eslemeleri_oku()
+                        for it in islemler:
+                            if it.get("tur") == "Gider":
+                                if it.get("firma"):
+                                    duz = market_adi_duzelt(it["firma"])
+                                    if duz != it["firma"]:
+                                        it["firma"] = duz
+                                if u_map and it.get("urun"):
+                                    u_n = tr_normalize_key(it["urun"])
+                                    if u_n in u_map and it.get("kategori") != u_map[u_n]:
+                                        it["kategori"] = u_map[u_n]
+                    except Exception:
+                        pass
                         yeni_adet = len(islemler)
 
                         arayuzu_guncelle()
@@ -5552,6 +6661,45 @@ def main(page: ft.Page):
         yenile_btn = make_button("🔄 Yenile", height=30, bgcolor="#10b981", color="white", tooltip="Buluttaki Yeni Kayıtları Getir", on_click=verileri_buluttan_yenile)
 
         # Kullanıcı İsteği: Yeni/Eski/Başa/Sona üstte ortalı, İşlem Geçmişi başlığı altında ortalı, Yenile ve Toplu Sil de altta ortalı
+                # Kullanıcı İsteği: Canlı Ürün ve Market Arama Kontrolleri
+        def arama_temizle_aksiyon(e=None):
+            arama_input.value = ""
+            arama_temizle_btn.visible = False
+            try:
+                arama_temizle_btn.update()
+            except Exception:
+                pass
+            arayuzu_guncelle()
+
+        def arama_metni_degisti(e=None):
+            val = (arama_input.value or "").strip()
+            arama_temizle_btn.visible = bool(val)
+            try:
+                arama_temizle_btn.update()
+            except Exception:
+                pass
+            arayuzu_guncelle()
+
+        arama_input = ft.TextField(
+            hint_text="🔍 Ürün veya market ara (örn: ekmek, bim, ertansa)...",
+            dense=True,
+            content_padding=make_padding(10, 8),
+            border_radius=8,
+            bgcolor="white",
+            expand=True,
+            text_size=12,
+            on_change=arama_metni_degisti
+        )
+
+        arama_temizle_btn = ft.IconButton(
+            icon=ft.Icons.CLEAR_ROUNDED,
+            icon_size=18,
+            icon_color="#94a3b8",
+            tooltip="Aramayı Temizle",
+            visible=False,
+            on_click=arama_temizle_aksiyon
+        )
+
         liste_ust_bar = ft.Container(
             content=ft.Column([
                 # 1. Sıralama ve Başa / Sona Kaydırma Butonları (Ortalanmış)
@@ -5571,7 +6719,17 @@ def main(page: ft.Page):
                 ft.Row([
                     yenile_btn,
                     toplu_sil_btn
-                ], alignment=ft.MainAxisAlignment.CENTER, spacing=10)
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
+
+                # 4. Canlı Ürün ve Market Arama Çubuğu
+                ft.Container(
+                    content=ft.Row([
+                        arama_input,
+                        arama_temizle_btn
+                    ], spacing=4),
+                    width=350,
+                    margin=make_margin(top=2, bottom=2)
+                )
             ], spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             width=355,
             padding=make_padding(0, 4)
@@ -5626,7 +6784,8 @@ def main(page: ft.Page):
                             "kategori": "Eğitim & Okul",
                             "miktar": f"{cocuk_sayisi} çocuk",
                             "birim_fiyat": format_turk_para(birim_harclik),
-                            "tutar": float(toplam_tutar)
+                            "tutar": float(toplam_tutar),
+                            "eklenme_ts": int(time.time())
                         }
 
                         if supabase:
@@ -5774,6 +6933,7 @@ def main(page: ft.Page):
         # --- İSTATİSTİK VE KATEGORİ GRAFİKLERİ PENCERESİ ---
         def istatistik_ac(e=None):
             stat_tum_zamanlar = [tum_zamanlar_modu[0]]
+            stat_gorunum = ["kategori"] # "kategori" veya "market"
 
             # İstatistik penceresi ana konteyneri
             stat_icerik_alani = ft.Column([], scroll=ft.ScrollMode.AUTO, spacing=10)
@@ -5784,6 +6944,8 @@ def main(page: ft.Page):
                 toplam_gelir = 0.0
                 toplam_gider = 0.0
                 kat_harcamalari = {}
+                market_harcamalari = {}
+                market_islem_adetleri = {}
 
                 for item in islemler:
                     t_date = stringden_tarih_al(item.get("tarih"))
@@ -5802,6 +6964,12 @@ def main(page: ft.Page):
                         if not kat:
                             kat = "Diğer"
                         kat_harcamalari[kat] = kat_harcamalari.get(kat, 0.0) + tutar
+
+                        mkt = (item.get("firma") or "Bilinmeyen Market").strip()
+                        if not mkt:
+                            mkt = "Bilinmeyen Market"
+                        market_harcamalari[mkt] = market_harcamalari.get(mkt, 0.0) + tutar
+                        market_islem_adetleri[mkt] = market_islem_adetleri.get(mkt, 0) + 1
 
                 net_fark = toplam_gelir - toplam_gider
                 bas_str = secilen_donem_bas[0].strftime("%d.%m.%Y")
@@ -5870,87 +7038,558 @@ def main(page: ft.Page):
                 ], spacing=6)
                 stat_icerik_alani.controls.append(ozet_satiri)
 
-                # 3. Kategori Dağılım Sıralaması
-                sirali_kategoriler = sorted(kat_harcamalari.items(), key=lambda x: x[1], reverse=True)
+                # Kullanıcı İsteği: Kategori ve Market Dağılımı Arasında Geçiş
+                def stat_gorunum_degistir(yeni_gorunum):
+                    dokunma_geribildirimi()
+                    stat_gorunum[0] = yeni_gorunum
+                    stat_hesapla_ve_ciz()
+                    try:
+                        stat_dialog.update()
+                    except Exception:
+                        page.update()
 
-                if sirali_kategoriler and toplam_gider > 0:
-                    en_cok_kat, en_cok_tutar = sirali_kategoriler[0]
-                    en_cok_oran = (en_cok_tutar / toplam_gider) * 100.0
+                kat_aktif = stat_gorunum[0] == "kategori"
+                gorunum_cubugu = ft.Container(
+                    content=ft.Row([
+                        make_button(
+                            "📊 Kategoriler",
+                            height=30,
+                            bgcolor="#2563eb" if kat_aktif else "#f1f5f9",
+                            color="white" if kat_aktif else "#475569",
+                            outlined=not kat_aktif,
+                            on_click=lambda _: stat_gorunum_degistir("kategori")
+                        ),
+                        make_button(
+                            "🛒 Marketler & Firmalar",
+                            height=30,
+                            bgcolor="#2563eb" if not kat_aktif else "#f1f5f9",
+                            color="white" if not kat_aktif else "#475569",
+                            outlined=kat_aktif,
+                            on_click=lambda _: stat_gorunum_degistir("market")
+                        )
+                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
+                    padding=make_padding(0, 4)
+                )
+                stat_icerik_alani.controls.append(gorunum_cubugu)
 
-                    # 1. Sıradaki Kategori Vurgu Rozeti
-                    rozet = ft.Container(
-                        content=ft.Row([
-                            ft.Text("🏆 En Çok Harcanan:", size=11, color="#854d0e", weight=ft.FontWeight.BOLD),
-                            ft.Text(f"{en_cok_kat} ({en_cok_tutar:,.2f} TL • %{en_cok_oran:.1f})", size=11, color="#713f12")
-                        ], spacing=4),
-                        bgcolor="#fef9c3",
-                        border=make_border_all(1, "#fef08a"),
-                        border_radius=8,
-                        padding=make_padding(8, 4)
-                    )
-                    stat_icerik_alani.controls.append(rozet)
+                if stat_gorunum[0] == "kategori":
+                    # --- KATEGORİ DAĞILIMI GÖRÜNÜMÜ ---
+                    sirali_kategoriler = sorted(kat_harcamalari.items(), key=lambda x: x[1], reverse=True)
 
-                    # Kategori Çubuk Grafikleri Başlığı
-                    stat_icerik_alani.controls.append(
-                        ft.Text("📊 Kategori Bazlı Harcama Dağılımı:", size=12, weight=ft.FontWeight.BOLD, color="#334155")
-                    )
-
-                    renk_haritasi = {
-                        "Market & Temel Gıda": "#10b981",
-                        "Ev & Faturalar": "#f59e0b",
-                        "Ulaşım / Yakıt": "#3b82f6",
-                        "Abur Cubur & Atıştırmalık": "#ec4899",
-                        "Giyim & Kişisel": "#8b5cf6",
-                        "Sağlık": "#ef4444",
-                        "Eğlence & Restoran": "#f97316",
-                        "Eğitim & Okul": "#06b6d4",
-                        "Sigara/Tütün": "#64748b",
-                        "Temizlik": "#14b8a6",
-                        "Transfer / Birikim": "#6366f1",
-                        "Diğer": "#94a3b8"
-                    }
-
-                    for kat_ad, kat_tut in sirali_kategoriler:
-                        oran = (kat_tut / toplam_gider) * 100.0 if toplam_gider > 0 else 0.0
-                        cubuk_orani = min(max(oran / 100.0, 0.01), 1.0)
-                        bar_renk = renk_haritasi.get(kat_ad, "#3b82f6")
-
-                        kat_karti = ft.Container(
-                            content=ft.Column([
-                                ft.Row([
-                                    ft.Row([
-                                        ft.Container(width=10, height=10, border_radius=5, bgcolor=bar_renk),
-                                        ft.Text(kat_ad, size=11.5, weight=ft.FontWeight.W_600, color="#1e293b")
-                                    ], spacing=6),
-                                    ft.Row([
-                                        ft.Text(f"%{oran:.1f}", size=11, color="#64748b", weight=ft.FontWeight.BOLD),
-                                        ft.Text(f"{kat_tut:,.2f} TL", size=11.5, weight=ft.FontWeight.BOLD, color="#b91c1c")
-                                    ], spacing=6)
-                                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                                # Modern doluluk çubuğu
-                                ft.Container(
-                                    content=ft.Row([
-                                        ft.Container(bgcolor=bar_renk, border_radius=4, height=7, expand=int(cubuk_orani * 100)),
-                                        ft.Container(bgcolor="#f1f5f9", border_radius=4, height=7, expand=max(1, int((1.0 - cubuk_orani) * 100)))
-                                    ], spacing=0),
-                                    border_radius=4,
-                                    height=7
-                                )
+                    if sirali_kategoriler and toplam_gider > 0:
+                        en_cok_kat, en_cok_tutar = sirali_kategoriler[0]
+                        en_cok_oran = (en_cok_tutar / toplam_gider) * 100.0
+    
+                        # 1. Sıradaki Kategori Vurgu Rozeti
+                        rozet = ft.Container(
+                            content=ft.Row([
+                                ft.Text("🏆 En Çok Harcanan:", size=11, color="#854d0e", weight=ft.FontWeight.BOLD),
+                                ft.Text(f"{en_cok_kat} ({en_cok_tutar:,.2f} TL • %{en_cok_oran:.1f})", size=11, color="#713f12")
                             ], spacing=4),
-                            bgcolor="white",
-                            border=make_border_all(1, "#f1f5f9"),
+                            bgcolor="#fef9c3",
+                            border=make_border_all(1, "#fef08a"),
                             border_radius=8,
-                            padding=make_padding(8, 6)
+                            padding=make_padding(8, 4)
                         )
-                        stat_icerik_alani.controls.append(kat_karti)
+                        stat_icerik_alani.controls.append(rozet)
+    
+                        # Kategori Çubuk Grafikleri Başlığı
+                        stat_icerik_alani.controls.append(
+                            ft.Text("📊 Kategori Bazlı Harcama Dağılımı:", size=12, weight=ft.FontWeight.BOLD, color="#334155")
+                        )
+    
+                        renk_haritasi = {
+                            "Market & Temel Gıda": "#10b981",
+                            "Ev & Faturalar": "#f59e0b",
+                            "Ulaşım / Yakıt": "#3b82f6",
+                            "Abur Cubur & Atıştırmalık": "#ec4899",
+                            "Giyim & Kişisel": "#8b5cf6",
+                            "Sağlık": "#ef4444",
+                            "Eğlence & Restoran": "#f97316",
+                            "Eğitim & Okul": "#06b6d4",
+                            "Sigara/Tütün": "#64748b",
+                            "Temizlik": "#14b8a6",
+                            "Transfer / Birikim": "#6366f1",
+                            "Diğer": "#94a3b8"
+                        }
+    
+                        # Kullanıcı İsteği: Kategorilere dokunulduğunda harcamaları gösterme ve kategorilerini düzenleme
+                        def kategori_harcamalari_modal_ac(secili_kategori):
+                            dokunma_geribildirimi()
+    
+                            def kategoriye_ait_harcamalari_getir():
+                                sonuclar = []
+                                for item in islemler:
+                                    if item.get("tur") != "Gider":
+                                        continue
+                                    itm_kat = (item.get("kategori") or "Diğer").strip()
+                                    if itm_kat != secili_kategori:
+                                        continue
+                                    t_date = stringden_tarih_al(item.get("tarih"))
+                                    if not stat_tum_zamanlar[0]:
+                                        if not t_date or not (secilen_donem_bas[0] <= t_date <= secilen_donem_bit[0]):
+                                            continue
+                                    sonuclar.append(item)
+                                return sonuclar
+    
+                            harcama_kolon = ft.Column([], spacing=8, scroll=ft.ScrollMode.AUTO)
+                            baslik_ozet = ft.Text("", size=11, color="#64748b")
+    
+                            def listeyi_ciz():
+                                harcama_kolon.controls.clear()
+                                harcamalar = kategoriye_ait_harcamalari_getir()
+                                toplam_t = sum(float(it.get("tutar") or 0.0) for it in harcamalar)
+                                baslik_ozet.value = f"Toplam: {toplam_t:,.2f} TL ({len(harcamalar)} işlem)"
+    
+                                if not harcamalar:
+                                    harcama_kolon.controls.append(
+                                        ft.Container(
+                                            content=ft.Column([
+                                                ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE_ROUNDED, size=36, color="#10b981"),
+                                                ft.Text(f"Bu dönemde '{secili_kategori}' kategorisinde harcama bulunmuyor.", size=12, color="#64748b", text_align=ft.TextAlign.CENTER)
+                                            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+                                            padding=20,
+                                            alignment=ft.alignment.center
+                                        )
+                                    )
+                                else:
+                                    for itm in harcamalar:
+                                        itm_tutar = float(itm.get("tutar") or 0.0)
+                                        itm_tar = itm.get("tarih") or ""
+                                        itm_saat = itm.get("saat") or ""
+                                        itm_firma = itm.get("firma") or "Market"
+                                        itm_urun = itm.get("urun") or "Harcama"
+                                        itm_kull = itm.get("kullanici") or "Abdurrahman"
+                                        itm_mik = itm.get("miktar") or ""
+                                        itm_bf = itm.get("birim_fiyat") or ""
+    
+                                        detay_str = f" • {itm_mik}" if itm_mik else ""
+                                        if itm_bf and str(itm_bf) != "-":
+                                            detay_str += f" x {itm_bf} TL"
+    
+                                        def kategori_degistir_aksiyon(ev, secili_item=itm):
+                                            dokunma_geribildirimi()
+                                            mevcut_kat_val = secili_item.get("kategori") or secili_kategori
+                                            secim_dd = make_dropdown(
+                                                options=kategoriler_oku(),
+                                                value=mevcut_kat_val,
+                                                label="Yeni Kategori",
+                                                width=280,
+                                                dense=True
+                                            )
+    
+                                            def kaydet_yeni_kat(ev_k):
+                                                yeni_k = secim_dd.value
+                                                if not yeni_k or yeni_k == mevcut_kat_val:
+                                                    close_app_dialog(page, kd_dialog)
+                                                    return
+    
+                                                secili_item["kategori"] = yeni_k
+                                                if supabase and secili_item.get("id"):
+                                                    try:
+                                                        supabase.table("islemler").update({"kategori": yeni_k}).eq("id", secili_item["id"]).execute()
+                                                    except Exception as ex_db:
+                                                        print("Kategori güncelleme Supabase hatası:", ex_db)
+
+                                                # Kullanıcı Kuralı: Bir ürünün kategorisi değiştirildiğinde o ürünle %100 aynı isimde olan tüm ürünlerin kategorisi otomatik olarak değişsin
+                                                u_adi_val = secili_item.get("urun") or ""
+                                                ayni_guncellenen = 0
+                                                if u_adi_val:
+                                                    ayni_guncellenen = ayni_urunlerin_kategorisini_guncelle(u_adi_val, yeni_k)
+
+                                                close_app_dialog(page, kd_dialog)
+                                                dokunma_geribildirimi()
+                                                msg = f"✅ Harcama kategorisi '{yeni_k}' olarak güncellendi!"
+                                                if ayni_guncellenen > 0:
+                                                    msg += f" (Aynı isimdeki {ayni_guncellenen} ürün de güncellendi)"
+                                                show_app_snackbar(page, msg, color="#10b981")
+                                                listeyi_ciz()
+                                                stat_hesapla_ve_ciz()
+                                                arayuzu_guncelle()
+    
+                                            kd_dialog = ft.AlertDialog(
+                                                title=ft.Row([
+                                                    ft.Icon(ft.Icons.DRIVE_FILE_RENAME_OUTLINE_ROUNDED, color="#2563eb", size=20),
+                                                    ft.Text("Harcama Kategorisini Değiştir", size=15, weight=ft.FontWeight.BOLD)
+                                                ], spacing=6),
+                                                content=ft.Container(
+                                                    content=ft.Column([
+                                                        ft.Text(f"Ürün: {secili_item.get('urun')} ({secili_item.get('firma')})", size=12, weight=ft.FontWeight.BOLD, color="#1e293b"),
+                                                        ft.Text(f"Tutar: {float(secili_item.get('tutar', 0)):,.2f} TL • {secili_item.get('tarih')}", size=11, color="#64748b"),
+                                                        ft.Divider(height=4, color="#e2e8f0"),
+                                                        ft.Text("Yeni kategoriyi seçin:", size=11, color="#475569"),
+                                                        secim_dd
+                                                    ], spacing=8, tight=True),
+                                                    width=300
+                                                ),
+                                                actions=[
+                                                    make_button("İptal", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, kd_dialog)),
+                                                    make_button("Kaydet", height=32, bgcolor="#2563eb", color="white", on_click=kaydet_yeni_kat)
+                                                ],
+                                                actions_alignment=ft.MainAxisAlignment.END
+                                            )
+                                            show_app_dialog(page, kd_dialog)
+    
+                                        def tam_duzenle_aksiyon(ev, secili_item=itm):
+                                            dokunma_geribildirimi()
+                                            close_app_dialog(page, kat_harcamalar_dialog)
+                                            islem_duzenle_modal_ac(secili_item)
+    
+                                        kart = ft.Container(
+                                            content=ft.Column([
+                                                ft.Row([
+                                                    ft.Row([
+                                                        ft.Text(f"📅 {itm_tar} {itm_saat}"[:16], size=10, color="#64748b"),
+                                                        ft.Text(f"• 👑 {itm_kull}" if "abdurrahman" in itm_kull.lower() else f"• 👤 {itm_kull}", size=10, color="#2563eb", weight=ft.FontWeight.BOLD)
+                                                    ], spacing=4),
+                                                    ft.Text(f"-{itm_tutar:,.2f} TL", size=12, weight=ft.FontWeight.BOLD, color="#b91c1c")
+                                                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                                                ft.Row([
+                                                    ft.Text(f"🛒 {itm_firma}", size=12, weight=ft.FontWeight.BOLD, color="#1e293b"),
+                                                    ft.Text(f"{itm_urun}{detay_str}", size=11, color="#475569", expand=True)
+                                                ], spacing=6),
+                                                ft.Row([
+                                                    ft.Container(
+                                                        content=ft.Text(f"🏷️ {secili_kategori}", size=9.5, color="#1e40af", weight=ft.FontWeight.W_600),
+                                                        bgcolor="#eff6ff",
+                                                        border=make_border_all(1, "#bfdbfe"),
+                                                        border_radius=6,
+                                                        padding=make_padding(6, 2)
+                                                    ),
+                                                    ft.Row([
+                                                        make_button("🏷️ Kategoriyi Değiştir", height=26, outlined=True, on_click=kategori_degistir_aksiyon),
+                                                        make_button("✏️ Düzenle", height=26, outlined=True, on_click=tam_duzenle_aksiyon)
+                                                    ], spacing=4)
+                                                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+                                            ], spacing=4),
+                                            bgcolor="#f8fafc",
+                                            border=make_border_all(1, "#e2e8f0"),
+                                            border_radius=8,
+                                            padding=make_padding(8, 8)
+                                        )
+                                        harcama_kolon.controls.append(kart)
+    
+                                try:
+                                    kat_harcamalar_dialog.update()
+                                except Exception:
+                                    pass
+    
+                            kat_harcamalar_dialog = ft.AlertDialog(
+                                title=ft.Column([
+                                    ft.Row([
+                                        ft.Icon(ft.Icons.RECEIPT_LONG_ROUNDED, color="#2563eb", size=22),
+                                        ft.Text(f"{secili_kategori}", size=15, weight=ft.FontWeight.BOLD, color="#1e293b", expand=True),
+                                    ], spacing=6),
+                                    baslik_ozet
+                                ], spacing=2),
+                                content=ft.Container(
+                                    content=harcama_kolon,
+                                    width=330,
+                                    height=390
+                                ),
+                                actions=[
+                                    make_button("✕ Kapat", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, kat_harcamalar_dialog))
+                                ],
+                                actions_alignment=ft.MainAxisAlignment.END
+                            )
+                            listeyi_ciz()
+                            show_app_dialog(page, kat_harcamalar_dialog)
+    
+                        stat_icerik_alani.controls.append(
+                            ft.Text("💡 Harcamaları görmek ve kategorilerini değiştirmek için kategoriye dokunun.", size=10, color="#2563eb", weight=ft.FontWeight.W_500)
+                        )
+    
+                        for kat_ad, kat_tut in sirali_kategoriler:
+                            oran = (kat_tut / toplam_gider) * 100.0 if toplam_gider > 0 else 0.0
+                            cubuk_orani = min(max(oran / 100.0, 0.01), 1.0)
+                            bar_renk = renk_haritasi.get(kat_ad, "#3b82f6")
+    
+                            kat_karti = ft.Container(
+                                content=ft.Column([
+                                    ft.Row([
+                                        ft.Row([
+                                            ft.Container(width=10, height=10, border_radius=5, bgcolor=bar_renk),
+                                            ft.Text(kat_ad, size=11.5, weight=ft.FontWeight.W_600, color="#1e293b")
+                                        ], spacing=6),
+                                        ft.Row([
+                                            ft.Text(f"%{oran:.1f}", size=11, color="#64748b", weight=ft.FontWeight.BOLD),
+                                            ft.Text(f"{kat_tut:,.2f} TL", size=11.5, weight=ft.FontWeight.BOLD, color="#b91c1c"),
+                                            ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, size=16, color="#94a3b8")
+                                        ], spacing=4)
+                                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                                    # Modern doluluk çubuğu
+                                    ft.Container(
+                                        content=ft.Row([
+                                            ft.Container(bgcolor=bar_renk, border_radius=4, height=7, expand=int(cubuk_orani * 100)),
+                                            ft.Container(bgcolor="#f1f5f9", border_radius=4, height=7, expand=max(1, int((1.0 - cubuk_orani) * 100)))
+                                        ], spacing=0),
+                                        border_radius=4,
+                                        height=7
+                                    )
+                                ], spacing=4),
+                                bgcolor="white",
+                                border=make_border_all(1, "#f1f5f9"),
+                                border_radius=8,
+                                padding=make_padding(8, 6),
+                                tooltip=f"'{kat_ad}' harcamalarını gör ve kategorilerini düzenle",
+                                on_click=lambda e, k=kat_ad: kategori_harcamalari_modal_ac(k)
+                            )
+                            stat_icerik_alani.controls.append(kat_karti)
+                    else:
+                        stat_icerik_alani.controls.append(
+                                ft.Container(
+                                    content=ft.Text("Seçilen dönemde henüz bir gider kaydı bulunmuyor.", size=12, color="grey"),
+                                    alignment=get_alignment_center(),
+                                    padding=20
+                                )
+                            )
                 else:
-                    stat_icerik_alani.controls.append(
-                        ft.Container(
-                            content=ft.Text("Seçilen dönemde henüz bir gider kaydı bulunmuyor.", size=12, color="grey"),
-                            alignment=get_alignment_center(),
-                            padding=20
+                    # --- KULLANICI İSTEĞİ: MARKET / FİRMA HARCAMA DAĞILIMI GÖRÜNÜMÜ ---
+                    sirali_marketler = sorted(market_harcamalari.items(), key=lambda x: x[1], reverse=True)
+
+                    if sirali_marketler and toplam_gider > 0:
+                        en_cok_mkt, en_cok_mkt_tut = sirali_marketler[0]
+                        en_cok_mkt_oran = (en_cok_mkt_tut / toplam_gider) * 100.0
+
+                        # En Çok Alışveriş Yapılan Market Rozeti
+                        mkt_rozet = ft.Container(
+                            content=ft.Row([
+                                ft.Text("🏆 En Çok Alışveriş:", size=11, color="#854d0e", weight=ft.FontWeight.BOLD),
+                                ft.Text(f"{en_cok_mkt} ({en_cok_mkt_tut:,.2f} TL • %{en_cok_mkt_oran:.1f})", size=11, color="#713f12")
+                            ], spacing=4),
+                            bgcolor="#fef9c3",
+                            border=make_border_all(1, "#fef08a"),
+                            border_radius=8,
+                            padding=make_padding(8, 4)
                         )
-                    )
+                        stat_icerik_alani.controls.append(mkt_rozet)
+
+                        stat_icerik_alani.controls.append(
+                            ft.Text("🛒 Market / Firma Bazlı Harcama Dağılımı:", size=12, weight=ft.FontWeight.BOLD, color="#334155")
+                        )
+
+                        # Market harcamalarını listeleme ve market ismini değiştirme modalı
+                        def market_harcamalari_modal_ac(secili_market):
+                            dokunma_geribildirimi()
+
+                            def markete_ait_harcamalari_getir():
+                                sonuclar = []
+                                for item in islemler:
+                                    if item.get("tur") != "Gider":
+                                        continue
+                                    itm_f = (item.get("firma") or "Bilinmeyen Market").strip()
+                                    if not itm_f:
+                                        itm_f = "Bilinmeyen Market"
+                                    if itm_f != secili_market:
+                                        continue
+                                    t_date = stringden_tarih_al(item.get("tarih"))
+                                    if not stat_tum_zamanlar[0]:
+                                        if not t_date or not (secilen_donem_bas[0] <= t_date <= secilen_donem_bit[0]):
+                                            continue
+                                    sonuclar.append(item)
+                                return sonuclar
+
+                            mkt_harcama_kolon = ft.Column([], spacing=8, scroll=ft.ScrollMode.AUTO)
+                            mkt_baslik_ozet = ft.Text("", size=11, color="#64748b")
+
+                            def mkt_listeyi_ciz():
+                                mkt_harcama_kolon.controls.clear()
+                                harcamalar = markete_ait_harcamalari_getir()
+                                toplam_t = sum(float(it.get("tutar") or 0.0) for it in harcamalar)
+                                mkt_baslik_ozet.value = f"Toplam: {toplam_t:,.2f} TL ({len(harcamalar)} işlem)"
+
+                                if not harcamalar:
+                                    mkt_harcama_kolon.controls.append(
+                                        ft.Container(
+                                            content=ft.Text(f"Bu dönemde '{secili_market}' marketinde harcama bulunmuyor.", size=12, color="#64748b"),
+                                            padding=20,
+                                            alignment=ft.alignment.center
+                                        )
+                                    )
+                                else:
+                                    for itm in harcamalar:
+                                        itm_tutar = float(itm.get("tutar") or 0.0)
+                                        itm_tar = itm.get("tarih") or ""
+                                        itm_saat = itm.get("saat") or ""
+                                        itm_urun = itm.get("urun") or "Harcama"
+                                        itm_kat = itm.get("kategori") or "Diğer"
+                                        itm_kull = itm.get("kullanici") or "Abdurrahman"
+                                        itm_mik = itm.get("miktar") or ""
+                                        itm_bf = itm.get("birim_fiyat") or ""
+
+                                        detay_str = f" • {itm_mik}" if itm_mik else ""
+                                        if itm_bf and str(itm_bf) != "-":
+                                            detay_str += f" x {itm_bf} TL"
+
+                                        def mkt_tam_duzenle(ev, secili_item=itm):
+                                            dokunma_geribildirimi()
+                                            close_app_dialog(page, mkt_harcamalar_dialog)
+                                            islem_duzenle_modal_ac(secili_item)
+
+                                        kart = ft.Container(
+                                            content=ft.Column([
+                                                ft.Row([
+                                                    ft.Row([
+                                                        ft.Text(f"📅 {itm_tar} {itm_saat}"[:16], size=10, color="#64748b"),
+                                                        ft.Text(f"• 👑 {itm_kull}" if "abdurrahman" in itm_kull.lower() else f"• 👤 {itm_kull}", size=10, color="#2563eb", weight=ft.FontWeight.BOLD)
+                                                    ], spacing=4),
+                                                    ft.Text(f"-{itm_tutar:,.2f} TL", size=12, weight=ft.FontWeight.BOLD, color="#b91c1c")
+                                                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                                                ft.Row([
+                                                    ft.Text(f"🛍️ {itm_urun}{detay_str}", size=12, weight=ft.FontWeight.BOLD, color="#1e293b", expand=True)
+                                                ]),
+                                                ft.Row([
+                                                    ft.Container(
+                                                        content=ft.Text(f"🏷️ {itm_kat}", size=9.5, color="#1e40af", weight=ft.FontWeight.W_600),
+                                                        bgcolor="#eff6ff",
+                                                        border=make_border_all(1, "#bfdbfe"),
+                                                        border_radius=6,
+                                                        padding=make_padding(6, 2)
+                                                    ),
+                                                    make_button("✏️ Düzenle", height=26, outlined=True, on_click=mkt_tam_duzenle)
+                                                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+                                            ], spacing=4),
+                                            bgcolor="#f8fafc",
+                                            border=make_border_all(1, "#e2e8f0"),
+                                            border_radius=8,
+                                            padding=make_padding(8, 8)
+                                        )
+                                        mkt_harcama_kolon.controls.append(kart)
+
+                                try:
+                                    mkt_harcamalar_dialog.update()
+                                except Exception:
+                                    pass
+
+                            # Kullanıcı İsteği: Market İsmini Değiştirme (Tüm geçmiş kayıtlar ve gelecek fişler dahil)
+                            def market_ismini_degistir_aksiyon(ev):
+                                dokunma_geribildirimi()
+                                yeni_mkt_input = ft.TextField(label="Yeni Market İsmi", value=secili_market, width=280, dense=True)
+                                gecmis_guncelle_chk = ft.Checkbox(label="Geçmişteki tüm kayıtları ve gelecek fişleri de güncelle", value=True)
+
+                                def market_ismini_kaydet(ev_s):
+                                    yeni_isim = (yeni_mkt_input.value or "").strip()
+                                    if not yeni_isim or yeni_isim == secili_market:
+                                        close_app_dialog(page, m_dialog)
+                                        return
+
+                                    mapping = market_eslemeleri_oku()
+                                    mapping[tr_lower(secili_market)] = yeni_isim
+                                    market_eslemeleri_kaydet(mapping)
+
+                                    guncellenen_adet = 0
+                                    eski_norm = tr_lower(secili_market)
+                                    for it in islemler:
+                                        it_f = it.get("firma") or ""
+                                        if tr_lower(it_f) == eski_norm or (len(eski_norm) >= 4 and eski_norm in tr_lower(it_f)):
+                                            it["firma"] = yeni_isim
+                                            guncellenen_adet += 1
+                                            if supabase and it.get("id"):
+                                                try:
+                                                    supabase.table("islemler").update({"firma": yeni_isim}).eq("id", it["id"]).execute()
+                                                except Exception:
+                                                    pass
+
+                                    close_app_dialog(page, m_dialog)
+                                    close_app_dialog(page, mkt_harcamalar_dialog)
+                                    dokunma_geribildirimi()
+                                    show_app_snackbar(page, f"✅ Market '{yeni_isim}' olarak güncellendi! ({guncellenen_adet} kayıt düzeltildi)", color="#10b981")
+                                    stat_hesapla_ve_ciz()
+                                    arayuzu_guncelle()
+
+                                m_dialog = ft.AlertDialog(
+                                    title=ft.Row([
+                                        ft.Icon(ft.Icons.DRIVE_FILE_RENAME_OUTLINE_ROUNDED, color="#2563eb", size=20),
+                                        ft.Text("Market İsmini Değiştir", size=15, weight=ft.FontWeight.BOLD)
+                                    ], spacing=6),
+                                    content=ft.Container(
+                                        content=ft.Column([
+                                            ft.Text(f"Mevcut Market: {secili_market}", size=12, color="#475569"),
+                                            yeni_mkt_input,
+                                            gecmis_guncelle_chk
+                                        ], spacing=8, tight=True),
+                                        width=300
+                                    ),
+                                    actions=[
+                                        make_button("İptal", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, m_dialog)),
+                                        make_button("💾 Kaydet", height=32, bgcolor="#2563eb", color="white", on_click=market_ismini_kaydet)
+                                    ],
+                                    actions_alignment=ft.MainAxisAlignment.END
+                                )
+                                show_app_dialog(page, m_dialog)
+
+                            mkt_harcamalar_dialog = ft.AlertDialog(
+                                title=ft.Column([
+                                    ft.Row([
+                                        ft.Icon(ft.Icons.STOREFRONT_ROUNDED, color="#2563eb", size=22),
+                                        ft.Text(f"{secili_market}", size=15, weight=ft.FontWeight.BOLD, color="#1e293b", expand=True),
+                                    ], spacing=6),
+                                    mkt_baslik_ozet
+                                ], spacing=2),
+                                content=ft.Container(
+                                    content=mkt_harcama_kolon,
+                                    width=330,
+                                    height=390
+                                ),
+                                actions=[
+                                    make_button("✏️ İsmi Değiştir", height=32, outlined=True, on_click=market_ismini_degistir_aksiyon),
+                                    make_button("✕ Kapat", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, mkt_harcamalar_dialog))
+                                ],
+                                actions_alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                            )
+                            mkt_listeyi_ciz()
+                            show_app_dialog(page, mkt_harcamalar_dialog)
+
+                        stat_icerik_alani.controls.append(
+                            ft.Text("💡 O marketteki harcamaları görmek ve market ismini değiştirmek için markete dokunun.", size=10, color="#2563eb", weight=ft.FontWeight.W_500)
+                        )
+
+                        renk_paleti = ["#10b981", "#3b82f6", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316", "#14b8a6", "#6366f1", "#64748b"]
+
+                        for idx, (mkt_ad, mkt_tut) in enumerate(sirali_marketler):
+                            oran = (mkt_tut / toplam_gider) * 100.0 if toplam_gider > 0 else 0.0
+                            cubuk_orani = min(max(oran / 100.0, 0.01), 1.0)
+                            bar_renk = renk_paleti[idx % len(renk_paleti)]
+                            islem_sayisi = market_islem_adetleri.get(mkt_ad, 1)
+
+                            mkt_karti = ft.Container(
+                                content=ft.Column([
+                                    ft.Row([
+                                        ft.Row([
+                                            ft.Container(width=10, height=10, border_radius=5, bgcolor=bar_renk),
+                                            ft.Text(mkt_ad, size=11.5, weight=ft.FontWeight.W_600, color="#1e293b")
+                                        ], spacing=6),
+                                        ft.Row([
+                                            ft.Text(f"{islem_sayisi} işlem • %{oran:.1f}", size=10.5, color="#64748b"),
+                                            ft.Text(f"{mkt_tut:,.2f} TL", size=11.5, weight=ft.FontWeight.BOLD, color="#b91c1c"),
+                                            ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, size=16, color="#94a3b8")
+                                        ], spacing=4)
+                                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                                    ft.Container(
+                                        content=ft.Row([
+                                            ft.Container(bgcolor=bar_renk, border_radius=4, height=7, expand=int(cubuk_orani * 100)),
+                                            ft.Container(bgcolor="#f1f5f9", border_radius=4, height=7, expand=max(1, int((1.0 - cubuk_orani) * 100)))
+                                        ], spacing=0),
+                                        border_radius=4,
+                                        height=7
+                                    )
+                                ], spacing=4),
+                                bgcolor="white",
+                                border=make_border_all(1, "#f1f5f9"),
+                                border_radius=8,
+                                padding=make_padding(8, 6),
+                                tooltip=f"'{mkt_ad}' harcamalarını gör ve ismini düzenle",
+                                on_click=lambda e, m=mkt_ad: market_harcamalari_modal_ac(m)
+                            )
+                            stat_icerik_alani.controls.append(mkt_karti)
+                    else:
+                        stat_icerik_alani.controls.append(
+                            ft.Container(
+                                content=ft.Text("Seçilen dönemde henüz bir gider kaydı bulunmuyor.", size=12, color="grey"),
+                                alignment=get_alignment_center(),
+                                padding=20
+                            )
+                        )
 
             stat_hesapla_ve_ciz()
 
@@ -6093,13 +7732,14 @@ def main(page: ft.Page):
         def telefon_bildirim_ayarlari_modal_ac(e=None):
             dokunma_geribildirimi()
             ayarlar = bildirim_ayarlari_oku()
-            aktif_topic = ayarlar.get("hatice_topic" if "hatice" in kullanici.lower() else "abdurrahman_topic")
-            
-            test_durum_txt = ft.Text("", size=12, color="#10b981")
+            alici_temiz = "hatice" if "hatice" in kullanici.lower() else "abdurrahman"
+            aktif_topic = ayarlar.get(f"{alici_temiz}_topic") or f"evbutcesi_{alici_temiz}_bildirim"
+
+            test_durum_txt = ft.Text("", size=11, color="#10b981", weight=ft.FontWeight.BOLD)
 
             def test_bildirimi_gonder_aksiyon(ev):
                 dokunma_geribildirimi()
-                test_durum_txt.value = "⏳ Test bildirimi telefona iletiliyor..."
+                test_durum_txt.value = "⏳ Test bildirimi gönderiliyor... Ekranın üst çubuğunu kontrol edin!"
                 test_durum_txt.color = "#2563eb"
                 try:
                     page.update()
@@ -6109,15 +7749,15 @@ def main(page: ft.Page):
                 def gonder_islem():
                     basari = telefon_push_bildirim_gonder(
                         alici=kullanici,
-                        baslik="🔔 Test: Ev Bütçesi Kayar Bildirim",
-                        mesaj=f"Tebrikler {kullanici}! Telefon uygulaması kapalı olsa bile ekranın üstünde kayan bildirim başarıyla çalışıyor.",
+                        baslik="🔔 Ev Bütçesi: Kayar Bildirim Testi",
+                        mesaj=f"Sayın {kullanici}, telefonunuz kapalı olsa dahi üst çubuktan kayarak gelen bildirim sistemi aktif!",
                         islem_turu="Gelir"
                     )
                     if basari:
-                        test_durum_txt.value = "✅ Bildirim telefonunuza gönderildi! Ekranın üstünü kontrol edin."
+                        test_durum_txt.value = "✅ Bildirim iletildi! Android üst bildirim çubuğunu kontrol edin."
                         test_durum_txt.color = "#10b981"
                     else:
-                        test_durum_txt.value = "⚠️ Bildirim gönderilemedi, internet bağlantınızı kontrol edin."
+                        test_durum_txt.value = "⚠️ Bildirim gönderilemedi, lütfen internet bağlantınızı kontrol edin."
                         test_durum_txt.color = "#ef4444"
                     try:
                         page.update()
@@ -6134,35 +7774,48 @@ def main(page: ft.Page):
                 except Exception:
                     pass
 
+            def playstore_ac(ev):
+                dokunma_geribildirimi()
+                p_url = "https://play.google.com/store/apps/details?id=io.heckel.ntfy"
+                try:
+                    page.launch_url(p_url)
+                except Exception:
+                    pass
+
             tel_dialog = ft.AlertDialog(
                 title=ft.Row([
                     ft.Icon(ft.Icons.PHONELINK_RING_ROUNDED, color="#2563eb", size=22),
-                    ft.Text("Telefon Kayar Bildirim Ayarı", size=16, weight=ft.FontWeight.BOLD)
+                    ft.Text("Android Kayar Bildirim Ayarı", size=15, weight=ft.FontWeight.BOLD)
                 ], spacing=8),
                 content=ft.Container(
                     content=ft.Column([
                         ft.Text(
-                            "Abdurrahman veya Hatice işlem eklediğinde, telefonunuz kapalı veya uygulama arka planda olsa dahi ekranın üstünde kayar bildirim görünür.",
-                            size=11, color="#475569"
+                            "Uygulama kapalıyken bile telefonun üst çubuğundan kayar bildirim almak için aşağıdaki iki yöntemden birini seçebilirsiniz:",
+                            size=11, color="#334155"
                         ),
                         ft.Container(
                             content=ft.Column([
-                                ft.Text(f"👤 Aktif Hesap: {kullanici}", size=12, weight=ft.FontWeight.BOLD, color="#1e293b"),
-                                ft.Text(f"📡 Bildirim Kanalı: {aktif_topic}", size=11, color="#2563eb", weight=ft.FontWeight.W_600),
+                                ft.Text(f"👤 Aktif Kullanıcı: {kullanici}", size=11, weight=ft.FontWeight.BOLD, color="#1e40af"),
+                                ft.Text(f"📡 Bildirim Kanalı: {aktif_topic}", size=10.5, color="#2563eb", weight=ft.FontWeight.W_600),
                             ], spacing=2),
                             bgcolor="#eff6ff",
                             border=make_border_all(1, "#bfdbfe"),
                             border_radius=8,
                             padding=make_padding(8, 6)
                         ),
-                        ft.Text("Telefonunuzda kayar bildirimleri etkinleştirmek için:", size=11, weight=ft.FontWeight.W_600),
-                        make_button("🌐 Tarayıcıda Aç & İzin Ver (Uygulamasız)", height=34, outlined=True, on_click=tarayicida_kanali_ac),
-                        ft.Text("Veya Google Play'den ücretsiz 'ntfy' uygulamasını kurarak kanal adını ekleyebilirsiniz.", size=10, color="#64748b"),
+                        ft.Text("YÖNTEM 1 (En Kolay - Uygulama Yüklemeden):", size=10.5, weight=ft.FontWeight.BOLD, color="#0f172a"),
+                        ft.Text("Aşağıdaki butona dokunup açılan sayfada 'Bildirimlere İzin Ver'e basmanız yeterlidir:", size=10, color="#64748b"),
+                        make_button("🌐 1 Tıkla Tarayıcıda Bildirimleri Aç", height=34, bgcolor="#2563eb", color="white", on_click=tarayicida_kanali_ac),
+                        ft.Divider(height=4, color="#e2e8f0"),
+                        ft.Text("YÖNTEM 2 (Google Play Uygulaması ile):", size=10.5, weight=ft.FontWeight.BOLD, color="#0f172a"),
+                        make_button("📲 Google Play'den ntfy İndir (2 MB)", height=32, outlined=True, on_click=playstore_ac),
+                        ft.Divider(height=4, color="#e2e8f0"),
+                        ft.Text("BİLDİRİMİ HEMEN TEST EDİN:", size=10.5, weight=ft.FontWeight.BOLD, color="#059669"),
                         make_button("🔔 Şimdi Test Bildirimi Gönder", height=36, bgcolor="#10b981", color="white", on_click=test_bildirimi_gonder_aksiyon),
                         test_durum_txt
-                    ], spacing=10, tight=True, scroll=ft.ScrollMode.AUTO),
+                    ], spacing=8, tight=True, scroll=ft.ScrollMode.AUTO),
                     width=320,
-                    height=360
+                    height=380
                 ),
                 actions=[
                     make_button("✕ Kapat", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, tel_dialog))
@@ -6354,6 +8007,123 @@ def main(page: ft.Page):
             show_app_dialog(page, tema_dialog)
 
         # --- ÜÇ ÇİZGİ HAMBURGER MENÜ MERKEZİ ---
+                # Kullanıcı İsteği: Market / Firma İsimleri Yönetimi (Ertansa -> Halk Pazarı)
+        def market_yonetimi_modal_ac():
+            dokunma_geribildirimi()
+
+            eski_input = ft.TextField(label="Eski / Algılanan İsim", hint_text="Örn: Ertansa", width=145, dense=True)
+            yeni_input = ft.TextField(label="Yeni / Doğru İsim", hint_text="Örn: Halk Pazarı", width=145, dense=True)
+            gecmis_dahil_chk = ft.Checkbox(label="Geçmişteki tüm kayıtlara hemen uygula", value=True)
+
+            liste_kolonu = ft.Column([], spacing=6, scroll=ft.ScrollMode.AUTO)
+
+            def esleme_listesini_yenile():
+                liste_kolonu.controls.clear()
+                guncel_map = market_eslemeleri_oku()
+                if not guncel_map:
+                    liste_kolonu.controls.append(
+                        ft.Text("Henüz kayıtlı market eşlemesi yok.", size=11, color="#64748b")
+                    )
+                else:
+                    for k, v in guncel_map.items():
+                        def sil_aksiyon(ev, key=k):
+                            m = market_eslemeleri_oku()
+                            if key in m:
+                                del m[key]
+                                market_eslemeleri_kaydet(m)
+                            esleme_listesini_yenile()
+                            try:
+                                my_dialog.update()
+                            except Exception:
+                                pass
+
+                        row = ft.Container(
+                            content=ft.Row([
+                                ft.Row([
+                                    ft.Text(f"🏷️ {k.capitalize()}", size=12, weight=ft.FontWeight.W_600, color="#1e293b"),
+                                    ft.Icon(ft.Icons.ARROW_FORWARD_ROUNDED, size=14, color="#64748b"),
+                                    ft.Text(f"🏪 {v}", size=12, weight=ft.FontWeight.BOLD, color="#2563eb"),
+                                ], spacing=6),
+                                ft.IconButton(
+                                    icon=ft.Icons.DELETE_OUTLINE_ROUNDED,
+                                    icon_color="#ef4444",
+                                    icon_size=18,
+                                    tooltip="Eşlemeyi Sil",
+                                    on_click=sil_aksiyon
+                                )
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            bgcolor="#f8fafc",
+                            border=make_border_all(1, "#e2e8f0"),
+                            border_radius=8,
+                            padding=make_padding(8, 4)
+                        )
+                        liste_kolonu.controls.append(row)
+
+            def yeni_esleme_ekle(ev):
+                eski_v = (eski_input.value or "").strip()
+                yeni_v = (yeni_input.value or "").strip()
+                if not eski_v or not yeni_v:
+                    show_app_snackbar(page, "⚠️ Lütfen hem eski hem yeni ismi girin.", color="#ef4444")
+                    return
+
+                m = market_eslemeleri_oku()
+                m[tr_lower(eski_v)] = yeni_v
+                market_eslemeleri_kaydet(m)
+
+                guncellenen_adet = 0
+                if gecmis_dahil_chk.value:
+                    eski_norm = tr_lower(eski_v)
+                    for it in islemler:
+                        it_f = it.get("firma") or ""
+                        if tr_lower(it_f) == eski_norm or (len(eski_norm) >= 4 and eski_norm in tr_lower(it_f)):
+                            it["firma"] = yeni_v
+                            guncellenen_adet += 1
+                            if supabase and it.get("id"):
+                                try:
+                                    supabase.table("islemler").update({"firma": yeni_v}).eq("id", it["id"]).execute()
+                                except Exception:
+                                    pass
+
+                eski_input.value = ""
+                yeni_input.value = ""
+                esleme_listesini_yenile()
+                arayuzu_guncelle()
+                msg = f"✅ '{eski_v}' ➔ '{yeni_v}' eşlemesi kaydedildi!"
+                if guncellenen_adet > 0:
+                    msg += f" ({guncellenen_adet} geçmiş kayıt güncellendi)"
+                show_app_snackbar(page, msg, color="#10b981")
+                try:
+                    my_dialog.update()
+                except Exception:
+                    pass
+
+            esleme_listesini_yenile()
+
+            my_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.STOREFRONT_ROUNDED, color="#2563eb", size=22),
+                    ft.Text("Market İsimleri Yönetimi", size=15, weight=ft.FontWeight.BOLD)
+                ], spacing=6),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Text("Fişlerdeki market isimlerini otomatik dönüştürün (Örn: Ertansa ➔ Halk Pazarı).", size=11, color="#64748b"),
+                        ft.Row([eski_input, yeni_input], spacing=8),
+                        gecmis_dahil_chk,
+                        make_button("➕ Eşleme Ekle ve Uygula", bgcolor="#2563eb", color="white", height=34, on_click=yeni_esleme_ekle),
+                        ft.Divider(height=6, color="#e2e8f0"),
+                        ft.Text("📋 Aktif Market Eşlemeleri:", size=12, weight=ft.FontWeight.BOLD, color="#1e293b"),
+                        ft.Container(content=liste_kolonu, height=140)
+                    ], spacing=8, tight=True),
+                    width=330,
+                    height=360
+                ),
+                actions=[
+                    make_button("Kapat", outlined=True, height=32, on_click=lambda _: close_app_dialog(page, my_dialog))
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+            show_app_dialog(page, my_dialog)
+
         def menu_ac(e=None):
             dokunma_geribildirimi()
             
@@ -6382,10 +8152,16 @@ def main(page: ft.Page):
                         ),
                         ft.Divider(height=6, color="#e2e8f0"),
                         ft.ListTile(
+                            leading=ft.Icon(ft.Icons.STOREFRONT_ROUNDED, color="#2563eb"),
+                            title=ft.Text("Market / Firma İsimleri Yönetimi", size=13, weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text("Örn: Ertansa -> Halk Pazarı otomatik eşleme ve geçmişi düzeltme", size=10, color="#64748b"),
+                            on_click=lambda _: menu_aksiyon_calistir(market_yonetimi_modal_ac)
+                        ),
+                        ft.ListTile(
                             leading=ft.Icon(ft.Icons.CATEGORY_ROUNDED, color="#2563eb"),
-                            title=ft.Text("Yeni Kategori Ekle", size=13, weight=ft.FontWeight.W_600),
-                            subtitle=ft.Text("Harcamalar için yeni kategori tanımla", size=10, color="#64748b"),
-                            on_click=lambda _: menu_aksiyon_calistir(yeni_kategori_dialog_ac)
+                            title=ft.Text("Kategori Yönetimi (Ekle / Düzenle / Sil)", size=13, weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text("Harcama kategorilerini ekle, yeniden adlandır veya sil", size=10, color="#64748b"),
+                            on_click=lambda _: menu_aksiyon_calistir(kategori_yonetimi_modal_ac)
                         ),
                         ft.ListTile(
                             leading=ft.Icon(ft.Icons.SAVINGS_ROUNDED, color="#059669"),
@@ -6505,8 +8281,10 @@ ANALİZ VE ÇIKARIM KURALLARI:
    - 'Gider': Alışveriş, harcama, market, fatura, benzin, ödeme vb.
    - 'Gelir': Maaş, ek ders, harçlık alma, hediye para vb.
    - 'Para Aktarımı': Bir aile üyesine nakit verme, IBAN'dan para gönderme vb.
-2. FİRMA / KURUM (firma veya kaynak):
-   - Harcamada satıcı/market adı (Örn: 'BİM', 'A101', 'Migros', 'Shell', 'Eczane', 'Nakit').
+2. FİRMA / KURUM (firma veya kaynak) - ÇOK ÖNEMLİ:
+   - Kullanıcının söylediği firma veya işletme adını tam ve eksiksiz tespit et!
+   - KESİNLİKLE genel isimlerle yetinme: Kullanıcı 'harman fırınından' dediyse firma MUTLAKA 'Harman Fırını' olmalıdır, asla sadece 'Fırın' yazma!
+   - 'Özlem pastanesinden' -> 'Özlem Pastanesi', 'Düzgün marketten' -> 'Düzgün Market', 'Sütçü Baba'dan' -> 'Sütçü Baba', 'A101'den' -> 'A101'.
    - Belirtilmemişse 'Market' veya 'Diğer' yaz.
 3. ÜRÜN / HİZMET (urun veya aciklama):
    - Kullanıcının aldığı ürün veya yapılan harcamanın net adı (Örn: 'EKMEK TEKLİ', 'Süt', 'Benzin', 'Öğretmen Maaşı').
@@ -6517,7 +8295,10 @@ ANALİZ VE ÇIKARIM KURALLARI:
    - Eğer kullanıcı tutarı doğrudan söylediyse (Örn: '850 TL benzin', '50 liraya tost'): bu tutarı kullan.
    - Eğer kullanıcı sadece miktar söylediyse ve fiyat belirtmediyse (Örn: '3 ekmek alındı'): Geçmiş Fiyat Hafızasındaki o firmanın birim fiyatını kullan (Örn: BİM Ekmek = 11,00 TL). Tutarı = miktar x birim_fiyat olarak hesapla (3 x 11,00 = 33,00 TL).
 6. KATEGORİ:
-   - Standart bütçe kategorilerinden en uygununu seç: 'Market & Temel Gıda', 'Abur Cubur & Atıştırmalık', 'Ev & Faturalar', 'Dışarıda Yemek / Eğlence', 'Eğitim & Okul', 'Ulaşım & Yakıt', 'Sağlık & Bakım', 'Giyim', 'Sigara/Tütün', 'Aile / Harçlık', 'Maaş', 'Ödenek', 'Ek Ders', 'Devir / Nakit', 'Transfer / Birikim', 'Diğer'.
+   - Standart bütçe kategorilerinden en uygununu seç.
+   - ÖZEL KURAL: Alışveriş poşetleri (poşet, poşeti, baskılı poşet vb.) MUTLAKA 'Poşet' kategorisine atanmalıdır!
+   - Fırın harcamaları 'Fırın & Unlu Mamuller' kategorisindedir.
+   - ÖRNEK: "harman fırınından 5 ekmek toplam 70 lira" -> firma: "Harman Fırını", urun: "Ekmek", miktar: "5 adet", birim_fiyat: "14,00", tutar: 70.0, kategori: "Fırın & Unlu Mamuller"
 
 ÇIKTI FORMATI:
 Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekleme, doğrudan json döndür):
@@ -6581,6 +8362,8 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                     sonuc = parse_sozel_ifade_yerel(cumle, hafiza)
 
                 if sonuc:
+                    sozel_urun = sonuc.get("urun", "Genel Harcama") if sonuc.get("tur") == "Gider" else ""
+                    sozel_kat = "Poşet" if any(w in sozel_urun.lower() for w in ["poşet", "poset"]) else sonuc.get("kategori", "Diğer")
                     yeni_islem = {
                         "kullanici": kullanici or "Ev Yöneticisi",
                         "tur": sonuc.get("tur", "Gider"),
@@ -6590,11 +8373,12 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                         "gelir_turu": sonuc.get("kategori", "") if sonuc.get("tur") == "Gelir" else "",
                         "aciklama": f"Sözel: {cumle}",
                         "firma": sonuc.get("firma", "Diğer") if sonuc.get("tur") == "Gider" else "",
-                        "urun": sonuc.get("urun", "Genel Harcama") if sonuc.get("tur") == "Gider" else "",
-                        "kategori": sonuc.get("kategori", "Diğer"),
+                        "urun": sozel_urun,
+                        "kategori": sozel_kat,
                         "miktar": sonuc.get("miktar", "1 adet"),
                         "birim_fiyat": str(sonuc.get("birim_fiyat", "")),
-                        "tutar": float(sonuc.get("tutar", 0.0))
+                        "tutar": float(sonuc.get("tutar", 0.0)),
+                        "eklenme_ts": int(time.time())
                     }
 
                     if supabase:
@@ -6627,6 +8411,20 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                         msg = f"✨ Eklendi: {firma_gosterim} - {urun_gosterim} ({yeni_islem['miktar']} x {birim_str} TL = {tutar_str} TL)"
                     else:
                         msg = f"✨ Eklendi: {firma_gosterim} - {urun_gosterim} ({tutar_str} TL)"
+
+                    try:
+                        sozel_bf_flt = parse_turk_tutari(birim_str) or float(yeni_islem["tutar"])
+                        sozel_f_kars = urun_gecmis_fiyat_karsilastir(
+                            urun=urun_gosterim,
+                            suanki_fiyat=sozel_bf_flt,
+                            suanki_firma=firma_gosterim,
+                            haric_id=yeni_islem.get("id"),
+                            islemler_listesi=islemler[1:]
+                        )
+                        if sozel_f_kars:
+                            msg += " | " + sozel_f_kars["mesaj"]
+                    except Exception:
+                        pass
 
                     show_app_snackbar(page, msg, color="#10b981")
                     bilgi_mesaji.value = msg
