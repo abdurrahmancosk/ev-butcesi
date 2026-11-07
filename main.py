@@ -2543,12 +2543,18 @@ def main(page: ft.Page):
             print("Picker sonucu işleme hatası:", ex_pk_res)
 
     galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
-    # Flet mobil ve masaüstü standart kayıt
-    try:
-        if hasattr(page, "services") and galeri_picker not in page.services:
-            page.services.append(galeri_picker)
-    except Exception:
-        pass
+    if hasattr(page, "overlay"):
+        try:
+            if galeri_picker not in page.overlay:
+                page.overlay.append(galeri_picker)
+        except Exception:
+            pass
+    if hasattr(page, "services"):
+        try:
+            if galeri_picker not in page.services:
+                page.services.append(galeri_picker)
+        except Exception:
+            pass
 
     csv_islemci_tetikleyici = [None]
 
@@ -5042,6 +5048,9 @@ def main(page: ft.Page):
 
                 # Mobilde hazır galeri_picker servisini tetikle
                 try:
+                    if hasattr(page, "overlay") and galeri_picker not in page.overlay:
+                        page.overlay.append(galeri_picker)
+                    page.update()
                     galeri_picker.pick_files(
                         dialog_title="Fiş Fotoğraflarını Seçin",
                         allow_multiple=True
@@ -5168,8 +5177,11 @@ def main(page: ft.Page):
                 show_app_snackbar(page, "📸 Kamera açılıyor...", color="#10b981")
 
                 try:
+                    if hasattr(page, "overlay") and galeri_picker not in page.overlay:
+                        page.overlay.append(galeri_picker)
+                    page.update()
                     galeri_picker.pick_files(
-                        dialog_title="Fiş Fotoğrafı Çek",
+                        dialog_title="Fiş Fotoğrafı Çek veya Seç",
                         allow_multiple=False
                     )
                 except Exception as ex_cam_pk:
@@ -7638,7 +7650,7 @@ def main(page: ft.Page):
                         rozet = ft.Container(
                             content=ft.Row([
                                 ft.Text("🏆 En Çok Harcanan:", size=11, color="#854d0e", weight=ft.FontWeight.BOLD),
-                                ft.Text(f"{en_cok_kat} ({en_cok_tutar:,.2f} TL • %{en_cok_oran:.1f})", size=11, color="#713f12")
+                                ft.Text(f"{en_cok_kat} ({en_cok_tutar:,.2f} TL • %{en_cok_oran:.1f})", size=10.5, color="#713f12", expand=True)
                             ], spacing=4),
                             bgcolor="#fef9c3",
                             border=make_border_all(1, "#fef08a"),
@@ -7909,7 +7921,7 @@ def main(page: ft.Page):
                         mkt_rozet = ft.Container(
                             content=ft.Row([
                                 ft.Text("🏆 En Çok Alışveriş:", size=11, color="#854d0e", weight=ft.FontWeight.BOLD),
-                                ft.Text(f"{en_cok_mkt} ({en_cok_mkt_tut:,.2f} TL • %{en_cok_mkt_oran:.1f})", size=11, color="#713f12")
+                                ft.Text(f"{en_cok_mkt} ({en_cok_mkt_tut:,.2f} TL • %{en_cok_mkt_oran:.1f})", size=10.5, color="#713f12", expand=True)
                             ], spacing=4),
                             bgcolor="#fef9c3",
                             border=make_border_all(1, "#fef08a"),
@@ -8156,8 +8168,8 @@ def main(page: ft.Page):
                 ], alignment=ft.MainAxisAlignment.START),
                 content=ft.Container(
                     content=stat_icerik_alani,
-                    width=340,
-                    height=380
+                    width=355,
+                    height=420
                 ),
                 actions=[
                     make_button("Kapat", width=90, height=34, outlined=True, on_click=stat_kapat)
