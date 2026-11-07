@@ -1330,6 +1330,137 @@ def tr_normalize_key(s):
         return ""
     return str(s).replace("İ", "i").replace("I", "ı").replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ş", "s").replace("ö", "o").replace("ç", "c").lower().strip()
 
+# ==============================================================================
+# 3 HESAP SİSTEMİ YÖNETİMİ (Nakit Hesap, Banka Hesabı, Birikim Hesabı)
+# ==============================================================================
+def islem_hesap_bilgisi_coz(item, varsayilan_kullanici="Abdurrahman"):
+    """
+    Bir işlemin (Gider, Gelir veya Para Aktarımı) hangi hesaba ve hangi kullanıcıya ait olduğunu çözümler.
+    Hesap Türleri: "Nakit Hesap", "Banka Hesabı", "Birikim Hesabı"
+    Kullanıcılar (Nakit için): "Abdurrahman", "Hatice"
+    """
+    tur = item.get("tur") or "Gider"
+    k_raw = str(item.get("kullanici") or "").strip()
+    u_raw = str(item.get("urun") or "").strip()
+    f_raw = str(item.get("firma") or "").strip()
+    kat_raw = str(item.get("kategori") or "").strip()
+    ack_raw = str(item.get("aciklama") or "").strip()
+    gt_raw = str(item.get("gelir_turu") or "").strip()
+    kay_raw = str(item.get("kaynak") or "").strip()
+
+    k_low = tr_lower(k_raw)
+    u_low = tr_lower(u_raw)
+    f_low = tr_lower(f_raw)
+    kat_low = tr_lower(kat_raw)
+    ack_low = tr_lower(ack_raw)
+    gt_low = tr_lower(gt_raw)
+    kay_low = tr_lower(kay_raw)
+
+    # Kim yaptı? (Abdurrahman vs Hatice)
+    if "hatice" in k_low or "aile üyesi" in k_low or "aile uyesi" in k_low:
+        kisi = "Hatice"
+    elif "abdurrahman" in k_low or "ev yöneticisi" in k_low or "ev yoneticisi" in k_low:
+        kisi = "Abdurrahman"
+    else:
+        kisi = varsayilan_kullanici if varsayilan_kullanici in ["Abdurrahman", "Hatice"] else "Abdurrahman"
+
+    if tur == "Gider":
+        # 1. Birikim Kasasına Nakit/Banka Aktarımı mı? (Örn: "Birikime Ayrılan Nakit", "Nakit Birikim (Geçen Aydan Kalan)")
+        if "transfer / birikim" in kat_low or "birikime ayrılan" in u_low or "birikime ayrilan" in u_low or "nakit birikim" in u_low:
+            kaynak_h = "Banka Hesabı" if "banka" in k_low or "banka" in f_low else "Nakit Hesap"
+            return {
+                "alt_tur": "Birikime Aktarım",
+                "hesap": kaynak_h,
+                "hedef_hesap": "Birikim Hesabı",
+                "kisi": kisi,
+                "etiket": f"🏦 Birikim Hesabına Aktarım ({kaynak_h} - {kisi})"
+            }
+
+        # 2. Harcama hangi hesaptan yapıldı?
+        if "birikim" in k_low or "birikim kasasından" in u_low or "birikim kasasindan" in u_low or "birikim hesabından" in u_low or "birikim" in ack_low:
+            return {
+                "alt_tur": "Harcama",
+                "hesap": "Birikim Hesabı",
+                "kisi": kisi,
+                "etiket": f"🏦 Birikim Hesabı ({kisi})"
+            }
+        elif "banka" in k_low:
+            return {
+                "alt_tur": "Harcama",
+                "hesap": "Banka Hesabı",
+                "kisi": kisi,
+                "etiket": f"💳 Banka Hesabı ({kisi})"
+            }
+        else:
+            # Varsayılan: Nakit Hesap (İşlemi kim yapıyorsa onun nakit hesabından düşer)
+            return {
+                "alt_tur": "Harcama",
+                "hesap": "Nakit Hesap",
+                "kisi": kisi,
+                "etiket": f"💵 Nakit Hesap ({kisi})"
+            }
+
+    elif tur == "Gelir":
+        # Gelir hangi hesaba girdi?
+        if "[birikim" in ack_low or "birikim için" in ack_low or "birikim icin" in ack_low or "birikim hesabı" in k_low:
+            hedef_h = "Birikim Hesabı"
+        elif "[banka" in ack_low or "banka hesabı" in k_low or (any(w in gt_low or w in kay_low or w in ack_low for w in ["maaş", "maas", "ek ders", "ödenek", "odenek", "meb", "banka"]) and "[nakit" not in ack_low and "eldeki nakit" not in kay_low):
+            hedef_h = "Banka Hesabı"
+        else:
+            hedef_h = "Nakit Hesap"
+
+        return {
+            "alt_tur": "Gelir",
+            "hesap": hedef_h,
+            "kisi": kisi,
+            "etiket": f"➕ {hedef_h} ({kisi})"
+        }
+
+    elif tur == "Para Aktarımı":
+        # Kaynak ve Hedef hesap çözümlemesi
+        # Yeni format: kaynak alanına "Banka Hesabı ➔ Birikim Hesabı" veya "Hatice (Nakit Hesap)" yazılabilir
+        kaynak_h = "Nakit Hesap"
+        if "banka" in k_low or "banka" in ack_low or kay_low.startswith("banka"):
+            kaynak_h = "Banka Hesabı"
+        elif "birikim" in k_low or kay_low.startswith("birikim"):
+            kaynak_h = "Birikim Hesabı"
+
+        if "➔" in kay_raw:
+            parts = [p.strip() for p in kay_raw.split("➔")]
+            k_part = parts[0]
+            h_part = parts[1]
+        else:
+            k_part = f"{kaynak_h} ({kisi})"
+            h_part = kay_raw or "Hatice (Nakit Hesap)"
+
+        return {
+            "alt_tur": "Transfer",
+            "kaynak_detay": k_part,
+            "hedef_detay": h_part,
+            "kisi": kisi,
+            "etiket": f"🔄 {k_part} ➔ {h_part}"
+        }
+
+    return {"alt_tur": "Diğer", "hesap": "Nakit Hesap", "kisi": kisi, "etiket": f"💵 Nakit Hesap ({kisi})"}
+
+def gider_kullanici_etiketi_olustur(secilen_hesap_str, aktif_kullanici):
+    """
+    Seçilen hesap türüne (Nakit Hesap, Banka Hesabı, Birikim Hesabı) ve aktif kullanıcıya göre
+    veritabanındaki 'kullanici' alanına kaydedilecek standart metni üretir.
+    Varsayılan Nakit Hesap ise işlemi kim yapıyorsa onun nakit hesabından düşer.
+    """
+    s = tr_lower(secilen_hesap_str)
+    if "birikim" in s:
+        return f"Birikim Hesabı ({aktif_kullanici})"
+    elif "banka" in s:
+        return f"Banka Hesabı ({aktif_kullanici})"
+    elif "hatice" in s:
+        return "Nakit Hesap (Hatice)"
+    elif "abdurrahman" in s:
+        return "Nakit Hesap (Abdurrahman)"
+    else:
+        return f"Nakit Hesap ({aktif_kullanici})"
+
 def market_adi_duzelt(ham_firma):
     """Kullanıcı Kuralı: Ertansa gibi marketler otomatik olarak Halk Pazarı veya tanımlı takma adına çevrilir."""
     if not ham_firma:
@@ -3090,12 +3221,24 @@ def main(page: ft.Page):
             alignment=ft.MainAxisAlignment.CENTER,
             vertical_alignment=ft.CrossAxisAlignment.CENTER
         )
+        gelir_hedef_hesap = make_dropdown(
+            label="Gelir Hangi Hesaba Eklensin?",
+            options=[
+                f"💵 Nakit Hesap ({kullanici})",
+                "💳 Banka Hesabı",
+                "🏦 Birikim Hesabı (Doğrudan Birikime)"
+            ],
+            value=f"💵 Nakit Hesap ({kullanici})",
+            width=320,
+            dense=True
+        )
         gelir_aciklamasi = ft.TextField(label="Açıklama (Örn: Kasım ayı ek ders ödemesi)", width=320, dense=True)
         gelir_tutari = ft.TextField(label="Tutar (TL)", width=320, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
 
         gelir_form_kutusu = ft.Column([
             ft.Text("Tarih ve Saat Seçimi:", size=12, color="grey"),
             gelir_tarih_saat_satiri,
+            gelir_hedef_hesap,
             gelir_kaynagi,
             gelir_turu_satiri,
             gelir_aciklamasi,
@@ -3254,13 +3397,29 @@ def main(page: ft.Page):
 
         fiyat_satiri = ft.Row([gider_birim_fiyat, gider_toplam_tutar], alignment=ft.MainAxisAlignment.CENTER)
 
+        diger_kisi = "Hatice" if kullanici == "Abdurrahman" else "Abdurrahman"
         gider_hesap_secimi = make_dropdown(
-            label="Harcayan Hesap (Nereden Düşsün?)",
-            options=["👑 Abdurrahman (Ana Kasa)", "👤 Hatice (Üye Cüzdanı)"],
-            value="👑 Abdurrahman (Ana Kasa)" if yonetici_mi else "👤 Hatice (Üye Cüzdanı)",
+            label="Ödeme Hesabı (Varsayılan: Nakit Hesap)",
+            options=[
+                f"💵 Nakit Hesap ({kullanici})",
+                "💳 Banka Hesabı",
+                "🏦 Birikim Hesabı (Altın / Döviz / Yatırım)",
+                f"💵 Nakit Hesap ({diger_kisi})"
+            ],
+            value=f"💵 Nakit Hesap ({kullanici})",
             width=320,
             dense=True
         )
+
+        def _kategori_degisti_hesap_oner(ev=None):
+            sec_k = tr_lower(gider_kategori.value or "")
+            if any(w in sec_k for w in ["yatırım", "yatirim", "altın", "altin", "döviz", "doviz"]):
+                show_app_snackbar(
+                    page,
+                    "💡 İpucu: Altın / Döviz gibi yatırımları önceki birikimlerinizden düşmek için '🏦 Birikim Hesabı'nı seçebilirsiniz.",
+                    color="#0284c7"
+                )
+        gider_kategori.on_change = _kategori_degisti_hesap_oner
 
         gider_form_kutusu = ft.Column([
             ft.Text("Tarih ve Saat:", size=12, color="grey"),
@@ -3273,20 +3432,38 @@ def main(page: ft.Page):
             fiyat_satiri
         ], spacing=10, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
 
-        # --- PARA AKTARIMI ALANLARI ---
+        # --- PARA AKTARIMI & BİRİKİM HESABINA AKTARIM ALANLARI ---
+        aktarim_kaynak_hesap = make_dropdown(
+            label="Hangi Hesaptan Aktarılacak? (Kaynak)",
+            options=[
+                f"💵 Nakit Hesap ({kullanici})",
+                "💳 Banka Hesabı",
+                "🏦 Birikim Hesabı"
+            ],
+            value=f"💵 Nakit Hesap ({kullanici})",
+            width=320,
+            dense=True
+        )
         aktarim_alici = make_dropdown(
-            label="Kime Para Aktarılacak?",
-            options=["Hatice", "Aile Üyesi", "Ahmet", "Ayşe", "Mehmet", "Diğer"],
-            value="Hatice",
+            label="Nereye / Kime Aktarılacak? (Hedef)",
+            options=[
+                "🏦 Birikim Hesabı (Gelirden / Nakitten Birikime)",
+                "👤 Hatice (Nakit Hesap)",
+                "👑 Abdurrahman (Nakit Hesap)",
+                "💳 Banka Hesabı",
+                "Diğer"
+            ],
+            value="🏦 Birikim Hesabı (Gelirden / Nakitten Birikime)",
             width=320,
             dense=True
         )
         aktarim_tutari = ft.TextField(label="Aktarılan Tutar (TL)", width=320, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
-        aktarim_aciklamasi = ft.TextField(label="Açıklama (Örn: Haftalık harçlık, pazar bütçesi)", width=320, dense=True)
+        aktarim_aciklamasi = ft.TextField(label="Açıklama (Örn: Aylık nakit birikim, Hatice cüzdan aktarımı)", width=320, dense=True)
 
         aktarim_form_kutusu = ft.Column([
-            ft.Text("Para Aktarımı Tarihi:", size=12, color="grey"),
+            ft.Text("Hesaplar Arası / Birikime Aktarım Tarihi:", size=12, color="grey"),
             aktarim_tarih_btn,
+            aktarim_kaynak_hesap,
             aktarim_alici,
             aktarim_tutari,
             aktarim_aciklamasi
@@ -3304,7 +3481,7 @@ def main(page: ft.Page):
                 dinamik_form_alani.content = gider_form_kutusu
             page.update()
 
-        tur_secenekleri = ["Gider", "Gelir", "Para Aktarımı"] if yonetici_mi else ["Gider"]
+        tur_secenekleri = ["Gider", "Gelir", "Para Aktarımı"]
         islem_turu = make_dropdown(
             options=tur_secenekleri,
             value="Gider",
@@ -3322,9 +3499,12 @@ def main(page: ft.Page):
         bu_ay_gider_txt = ft.Text("-0,00 TL", size=10.5, weight=ft.FontWeight.BOLD, color="#f87171", text_align=ft.TextAlign.CENTER)
         bu_ay_fark_txt = ft.Text("0,00 TL", size=10.5, weight=ft.FontWeight.BOLD, color="#38bdf8", text_align=ft.TextAlign.CENTER)
 
-        uye_cuzdan_metni = ft.Text("", size=11, color="#cbd5e1")
+        hesap_nakit_txt = ft.Text("0,00 TL", size=11, weight=ft.FontWeight.BOLD, color="#34d399", text_align=ft.TextAlign.CENTER)
+        hesap_banka_txt = ft.Text("0,00 TL", size=11, weight=ft.FontWeight.BOLD, color="#60a5fa", text_align=ft.TextAlign.CENTER)
+        hesap_birikim_txt = ft.Text("0,00 TL", size=11, weight=ft.FontWeight.BOLD, color="#fbbf24", text_align=ft.TextAlign.CENTER)
+        uye_cuzdan_metni = ft.Text("", size=10.5, color="#cbd5e1")
 
-        # Lüks Modern Fintech Bakiye Kartı (Gece Mavisi / Zümrüt & Safir Vurgulu)
+        # Lüks Modern Fintech Bakiye Kartı (3 Hesap: Nakit Hesap, Banka Hesabı, Birikim Hesabı)
         bakiye_karti = ft.Container(
             content=ft.Column([
                 ft.Row([
@@ -3333,60 +3513,101 @@ def main(page: ft.Page):
                         kasa_tutar_metni
                     ], spacing=2),
                     ft.Container(
-                        content=ft.Icon(ft.Icons.WALLET_ROUNDED, color="#38bdf8", size=24),
+                        content=ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, color="#38bdf8", size=24),
                         bgcolor="#1e293b",
                         border=make_border_all(1, "#334155"),
                         border_radius=12,
                         padding=10
                     )
                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                ft.Container(height=6),
-                ft.Container(
-                    content=ft.Row([
-                        ft.Container(
-                            content=ft.Column([
-                                ft.Text("Bu Ay Gelir", size=10, color="#94a3b8", weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
-                                bu_ay_gelir_txt
-                            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
-                            bgcolor="#132338",
-                            border_radius=10,
-                            padding=make_padding(4, 4),
-                            expand=1,
-                            height=54,
-                            alignment=get_alignment_center()
-                        ),
-                        ft.Container(
-                            content=ft.Column([
-                                ft.Text("Bu Ay Gider", size=10, color="#94a3b8", weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
-                                bu_ay_gider_txt
-                            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
-                            bgcolor="#271822",
-                            border_radius=10,
-                            padding=make_padding(4, 4),
-                            expand=1,
-                            height=54,
-                            alignment=get_alignment_center()
-                        ),
-                        ft.Container(
-                            content=ft.Column([
-                                ft.Text("Aylık Net", size=10, color="#94a3b8", weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
-                                bu_ay_fark_txt
-                            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
-                            bgcolor="#162235",
-                            border_radius=10,
-                            padding=make_padding(4, 4),
-                            expand=1,
-                            height=54,
-                            alignment=get_alignment_center()
-                        ),
-                    ], spacing=6),
-                ),
+                ft.Container(height=4),
+                # 3 Ana Hesap Kutucukları (Nakit Hesap, Banka Hesabı, Birikim Hesabı)
+                ft.Row([
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Text("💵 Nakit Hesap", size=9.5, color="#a7f3d0", weight=ft.FontWeight.W_600, text_align=ft.TextAlign.CENTER),
+                            hesap_nakit_txt
+                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
+                        bgcolor="#064e3b",
+                        border=make_border_all(1, "#059669"),
+                        border_radius=10,
+                        padding=make_padding(4, 5),
+                        expand=1,
+                        height=50,
+                        alignment=get_alignment_center()
+                    ),
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Text("💳 Banka Hesabı", size=9.5, color="#bfdbfe", weight=ft.FontWeight.W_600, text_align=ft.TextAlign.CENTER),
+                            hesap_banka_txt
+                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
+                        bgcolor="#1e3a8a",
+                        border=make_border_all(1, "#2563eb"),
+                        border_radius=10,
+                        padding=make_padding(4, 5),
+                        expand=1,
+                        height=50,
+                        alignment=get_alignment_center()
+                    ),
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Text("🏦 Birikim Hesabı", size=9.5, color="#fde68a", weight=ft.FontWeight.W_600, text_align=ft.TextAlign.CENTER),
+                            hesap_birikim_txt
+                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
+                        bgcolor="#78350f",
+                        border=make_border_all(1, "#d97706"),
+                        border_radius=10,
+                        padding=make_padding(4, 5),
+                        expand=1,
+                        height=50,
+                        alignment=get_alignment_center()
+                    ),
+                ], spacing=6),
+                # Seçili Dönem Özeti (Bu Ay Gelir, Bu Ay Gider, Aylık Net)
+                ft.Row([
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Text("Bu Ay Gelir", size=9.5, color="#94a3b8", weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
+                            bu_ay_gelir_txt
+                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
+                        bgcolor="#132338",
+                        border_radius=10,
+                        padding=make_padding(4, 4),
+                        expand=1,
+                        height=48,
+                        alignment=get_alignment_center()
+                    ),
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Text("Bu Ay Gider", size=9.5, color="#94a3b8", weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
+                            bu_ay_gider_txt
+                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
+                        bgcolor="#271822",
+                        border_radius=10,
+                        padding=make_padding(4, 4),
+                        expand=1,
+                        height=48,
+                        alignment=get_alignment_center()
+                    ),
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Text("Aylık Net", size=9.5, color="#94a3b8", weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
+                            bu_ay_fark_txt
+                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
+                        bgcolor="#162235",
+                        border_radius=10,
+                        padding=make_padding(4, 4),
+                        expand=1,
+                        height=48,
+                        alignment=get_alignment_center()
+                    ),
+                ], spacing=6),
                 uye_cuzdan_metni
-            ], spacing=4),
+            ], spacing=5),
             bgcolor="#0f172a",
             border=make_border_all(1, "#1e293b"),
             border_radius=18,
-            padding=16,
+            padding=14,
             width=355,
         )
 
@@ -3951,7 +4172,7 @@ def main(page: ft.Page):
                         tur_turu = "Para Aktarımı"
 
                     kayit = {
-                        "kullanici": kullanici or "Ev Yöneticisi",
+                        "kullanici": f"Birikim Hesabı ({kullanici})" if "birikim" in cumle.lower() else (f"Banka Hesabı ({kullanici})" if ("banka" in cumle.lower() or "kart" in cumle.lower()) else f"Nakit Hesap ({kullanici})"),
                         "tur": tur_turu,
                         "tarih": t_str or datetime.date.today().strftime("%d.%m.%Y"),
                         "saat": s_str or datetime.datetime.now().strftime("%H:%M"),
@@ -4467,7 +4688,7 @@ def main(page: ft.Page):
                         eklenen_toplam = 0.0
                         simdi_ts = int(datetime.datetime.now().timestamp() * 1000)
 
-                        harcayan_hesap = "Hatice" if (not yonetici_mi or kullanici == "Hatice") else "Abdurrahman"
+                        harcayan_hesap = gider_kullanici_etiketi_olustur(fis_hesap_dd.value, kullanici)
 
                         for itm_idx, itm in enumerate(toplu_onay_verileri):
                             if itm["chk"].value:
@@ -4543,6 +4764,19 @@ def main(page: ft.Page):
                         f"✨ {yeni_urun_sayisi} yeni ürün seçili • ⚠️ {toplam_mukerrer_sayisi} mükerrer ürünün işareti kaldırıldı."
                     )
 
+                    fis_hesap_dd = make_dropdown(
+                        label="Bu Fiş Hangi Hesaptan Ödendi?",
+                        options=[
+                            f"💵 Nakit Hesap ({kullanici})",
+                            "💳 Banka Hesabı",
+                            "🏦 Birikim Hesabı",
+                            f"💵 Nakit Hesap ({'Hatice' if kullanici == 'Abdurrahman' else 'Abdurrahman'})"
+                        ],
+                        value=f"💵 Nakit Hesap ({kullanici})",
+                        width=335,
+                        dense=True
+                    )
+
                     toplu_fis_dialog = ft.AlertDialog(
                         title=ft.Row([
                             ft.Icon(ft.Icons.RECEIPT_LONG, color="#2563eb", size=24),
@@ -4557,6 +4791,7 @@ def main(page: ft.Page):
                                     border_radius=8,
                                     padding=8
                                 ),
+                                fis_hesap_dd,
                                 ft.Container(
                                     content=ft.Column(toplu_urun_kartlari, scroll=ft.ScrollMode.AUTO, spacing=8),
                                     height=300,
@@ -5780,16 +6015,31 @@ def main(page: ft.Page):
             duzenle_tutar = ft.TextField(label="Tutar (TL)", value=str(item.get("tutar", 0.0)), width=310, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
 
             if tur == "Gider":
-                mevcut_kullanici = item.get("kullanici") or "Abdurrahman"
-                if mevcut_kullanici == "Ev Yöneticisi":
-                    mevcut_kullanici = "Abdurrahman"
-                elif mevcut_kullanici == "Aile Üyesi":
-                    mevcut_kullanici = "Hatice"
+                cozulen_h = islem_hesap_bilgisi_coz(item, varsayilan_kullanici=kullanici)
+                h_ad = cozulen_h.get("hesap", "Nakit Hesap")
+                h_kisi = cozulen_h.get("kisi", kullanici)
+                if h_ad == "Birikim Hesabı":
+                    mevcut_h_deger = f"Birikim Hesabı ({h_kisi})"
+                elif h_ad == "Banka Hesabı":
+                    mevcut_h_deger = f"Banka Hesabı ({h_kisi})"
+                else:
+                    mevcut_h_deger = f"Nakit Hesap ({h_kisi})"
+
+                hesap_opsiyonlari = [
+                    "Nakit Hesap (Abdurrahman)",
+                    "Nakit Hesap (Hatice)",
+                    "Banka Hesabı (Abdurrahman)",
+                    "Banka Hesabı (Hatice)",
+                    "Birikim Hesabı (Abdurrahman)",
+                    "Birikim Hesabı (Hatice)"
+                ]
+                if mevcut_h_deger not in hesap_opsiyonlari:
+                    hesap_opsiyonlari.insert(0, mevcut_h_deger)
 
                 duzenle_hesap = make_dropdown(
-                    options=["Abdurrahman", "Hatice"],
-                    value=mevcut_kullanici,
-                    label="Harcayan Hesap (Kasa / Üye)",
+                    options=hesap_opsiyonlari,
+                    value=mevcut_h_deger,
+                    label="Ödeme Hesabı (Nakit / Banka / Birikim)",
                     width=310,
                     dense=True
                 )
@@ -6037,40 +6287,107 @@ def main(page: ft.Page):
             liste_arayuzu.controls.clear()
             liste_arayuzu.controls.append(ft.Container(key="liste_basi", height=0))
 
-            # 1. TÜM ZAMANLAR KÜMÜLATİF BAKİYE (Eldeki Gerçek Toplam Nakit / Kasa)
-            # Kural: Harcama Aile Üyesi hesabından kaydedilirse o üyenin hesabından düşer; aksi durumda (Ev Yöneticisi) toplam kasadan düşer.
+            # 1. TÜM ZAMANLAR 3 HESAP BAKİYE SİSTEMİ (Nakit Hesap, Banka Hesabı, Birikim Hesabı)
+            # Kural: Alışverişler varsayılan olarak Nakit Hesaptan yapılır ve işlemi kim yapıyorsa (Abdurrahman / Hatice) onun hesabından düşer.
+            # Önceki aylarda biriken nakit birikimlerle altın/döviz gibi yatırım yapıldığında Birikim Hesabından düşülür.
             genel_gelir = 0.0
             kasa_harcamalari = 0.0
             genel_kullanici_harcamalari = {}
             genel_kullaniciya_aktarilan = {}
 
+            nakit_giris_abdurrahman = 0.0
+            nakit_cikis_abdurrahman = 0.0
+            nakit_giris_hatice = 0.0
+            nakit_cikis_hatice = 0.0
+
+            banka_giris = 0.0
+            banka_cikis = 0.0
+
+            birikim_giris = 0.0
+            birikim_cikis = 0.0
+
             for item in islemler:
                 t = float(item.get("tutar") or 0.0)
                 tur = item.get("tur")
-                sahip = (item.get("kullanici") or "Abdurrahman").strip()
-                if sahip == "Ev Yöneticisi":
-                    sahip = "Abdurrahman"
-                elif sahip == "Aile Üyesi":
-                    sahip = "Hatice"
+                h_bilgi = islem_hesap_bilgisi_coz(item, varsayilan_kullanici="Abdurrahman")
+                kisi = h_bilgi.get("kisi", "Abdurrahman")
+                hesap_turu = h_bilgi.get("hesap", "Nakit Hesap")
+                alt_tur = h_bilgi.get("alt_tur", "Harcama")
 
                 if tur == "Gelir":
                     genel_gelir += t
-                elif tur == "Para Aktarımı":
-                    alici = (item.get("kaynak") or "Hatice").strip()
-                    if alici == "Aile Üyesi":
-                        alici = "Hatice"
-                    genel_kullaniciya_aktarilan[alici] = genel_kullaniciya_aktarilan.get(alici, 0.0) + t
-                elif tur == "Gider":
-                    if sahip not in ["Abdurrahman", "Ev Yöneticisi"]:
-                        genel_kullanici_harcamalari[sahip] = genel_kullanici_harcamalari.get(sahip, 0.0) + t
+                    if hesap_turu == "Birikim Hesabı":
+                        birikim_giris += t
+                    elif hesap_turu == "Banka Hesabı":
+                        banka_giris += t
                     else:
+                        if kisi == "Hatice":
+                            nakit_giris_hatice += t
+                        else:
+                            nakit_giris_abdurrahman += t
+
+                elif tur == "Para Aktarımı":
+                    k_det = tr_lower(h_bilgi.get("kaynak_detay", ""))
+                    h_det = tr_lower(h_bilgi.get("hedef_detay", ""))
+
+                    # Kaynaktan düş
+                    if "birikim" in k_det:
+                        birikim_cikis += t
+                    elif "banka" in k_det:
+                        banka_cikis += t
+                    elif "hatice" in k_det:
+                        nakit_cikis_hatice += t
+                    else:
+                        nakit_cikis_abdurrahman += t
+
+                    # Hedefe ekle
+                    if "birikim" in h_det:
+                        birikim_giris += t
+                    elif "banka" in h_det:
+                        banka_giris += t
+                    elif "hatice" in h_det or "aile" in h_det:
+                        nakit_giris_hatice += t
+                        genel_kullaniciya_aktarilan["Hatice"] = genel_kullaniciya_aktarilan.get("Hatice", 0.0) + t
+                    elif "abdurrahman" in h_det:
+                        nakit_giris_abdurrahman += t
+                    else:
+                        genel_kullaniciya_aktarilan[h_det.capitalize()] = genel_kullaniciya_aktarilan.get(h_det.capitalize(), 0.0) + t
+
+                elif tur == "Gider":
+                    if alt_tur == "Birikime Aktarım":
+                        # Nakit veya Bankadan Birikim Hesabına aktarılan tutar
+                        if hesap_turu == "Banka Hesabı":
+                            banka_cikis += t
+                        else:
+                            if kisi == "Hatice":
+                                nakit_cikis_hatice += t
+                            else:
+                                nakit_cikis_abdurrahman += t
+                        birikim_giris += t
+                    elif hesap_turu == "Birikim Hesabı":
+                        # Altın, Döviz vb. Birikim Hesabından yapılan yatırım/harcama
+                        birikim_cikis += t
+                    elif hesap_turu == "Banka Hesabı":
+                        banka_cikis += t
                         kasa_harcamalari += t
+                    else:
+                        # Nakit Hesap harcaması: İşlemi kim yapıyorsa onun nakit hesabından düşer
+                        if kisi == "Hatice":
+                            nakit_cikis_hatice += t
+                            genel_kullanici_harcamalari["Hatice"] = genel_kullanici_harcamalari.get("Hatice", 0.0) + t
+                        else:
+                            nakit_cikis_abdurrahman += t
+                            kasa_harcamalari += t
 
-            # Kasadan üyelere aktarılan toplam tutar
-            toplam_uyelere_aktarilan = sum(genel_kullaniciya_aktarilan.values())
+            net_nakit_abdurrahman = nakit_giris_abdurrahman - nakit_cikis_abdurrahman
+            net_nakit_hatice = nakit_giris_hatice - nakit_cikis_hatice
+            toplam_nakit_hesap = net_nakit_abdurrahman + net_nakit_hatice
+            net_banka_hesabi = banka_giris - banka_cikis
+            net_birikim_hesabi = birikim_giris - birikim_cikis
 
-            # Toplam Kasada Kalan Net Para:
-            genel_kasa = genel_gelir - kasa_harcamalari - toplam_uyelere_aktarilan
+            # Eldeki Kullanılabilir Ana Bakiye (Nakit + Banka) ve Genel Toplam Varlık
+            kullanilabilir_ana_kasa = toplam_nakit_hesap + net_banka_hesabi
+            genel_kasa = kullanilabilir_ana_kasa
 
             # 2. SEÇİLİ DÖNEM HESAPLAMASI (O Ayın Gelir ve Gideri)
             donem_gelir = 0.0
@@ -6336,10 +6653,29 @@ def main(page: ft.Page):
                     on_click=lambda e, it=item: silme_onayi_iste(it)
                 )
 
-                # Kimin işlem yaptığı ve miktar/birim fiyat etiketleri
-                sahip_badge_metni = "👑 Abdurrahman" if islem_sahibi in ["Abdurrahman", "Ev Yöneticisi"] else "👤 Hatice"
-                sahip_badge_bg = "#eff6ff" if islem_sahibi in ["Abdurrahman", "Ev Yöneticisi"] else "#f0fdf4"
-                sahip_badge_color = "#2563eb" if islem_sahibi in ["Abdurrahman", "Ev Yöneticisi"] else "#16a34a"
+                # Kimin işlem yaptığı ve hangi hesaptan (Nakit / Banka / Birikim) yapıldığı rozeti
+                h_cozum = islem_hesap_bilgisi_coz(item, varsayilan_kullanici="Abdurrahman")
+                h_kisi = h_cozum.get("kisi", "Abdurrahman")
+                h_hesap = h_cozum.get("hesap", "Nakit Hesap")
+                h_alt = h_cozum.get("alt_tur", "Harcama")
+
+                kisi_ikon = "👑" if h_kisi == "Abdurrahman" else "👤"
+                if h_alt == "Birikime Aktarım":
+                    sahip_badge_metni = f"🏦 Birikime Aktarım ({kisi_ikon} {h_kisi})"
+                    sahip_badge_bg = "#fef3c7"
+                    sahip_badge_color = "#b45309"
+                elif h_hesap == "Birikim Hesabı":
+                    sahip_badge_metni = f"🏦 Birikim Hesabı ({kisi_ikon} {h_kisi})"
+                    sahip_badge_bg = "#fef3c7"
+                    sahip_badge_color = "#b45309"
+                elif h_hesap == "Banka Hesabı":
+                    sahip_badge_metni = f"💳 Banka Hesabı ({kisi_ikon} {h_kisi})"
+                    sahip_badge_bg = "#dbeafe"
+                    sahip_badge_color = "#1d4ed8"
+                else:
+                    sahip_badge_metni = f"💵 Nakit ({kisi_ikon} {h_kisi})"
+                    sahip_badge_bg = "#eff6ff" if h_kisi == "Abdurrahman" else "#f0fdf4"
+                    sahip_badge_color = "#2563eb" if h_kisi == "Abdurrahman" else "#16a34a"
 
                 miktar_val_str = str(item.get("miktar") or "").strip()
                 raw_bf = item.get("birim_fiyat")
@@ -6479,53 +6815,43 @@ def main(page: ft.Page):
                     )
                 )
 
-            # Bakiye Özeti ve Modern Kart Güncellemesi
-            donem_fark = donem_gelir - donem_gider
+            # Bakiye Özeti ve 3 Hesap Modern Kart Güncellemesi
+            hesap_nakit_txt.value = f"{toplam_nakit_hesap:,.2f} TL"
+            hesap_banka_txt.value = f"{net_banka_hesabi:,.2f} TL"
+            hesap_birikim_txt.value = f"{net_birikim_hesabi:,.2f} TL"
 
             if yonetici_mi:
-                uye_bakiye_metinleri = []
-                # Aktarım yapılan veya harcama yapan tüm üyeleri topla
-                tum_uyeler = set(list(genel_kullaniciya_aktarilan.keys()) + list(genel_kullanici_harcamalari.keys()))
-                for u in sorted(tum_uyeler):
-                    if u in ["Abdurrahman", "Ev Yöneticisi"]:
-                        continue
-                    aktarilan = genel_kullaniciya_aktarilan.get(u, 0.0)
-                    harcanan = genel_kullanici_harcamalari.get(u, 0.0)
-                    kalan = aktarilan - harcanan
-                    uye_bakiye_metinleri.append(f"{u}: {kalan:,.2f} TL (Harcama: {harcanan:,.2f} TL)")
-
-                detay_str = " | ".join(uye_bakiye_metinleri) if uye_bakiye_metinleri else ""
-
-                kasa_baslik_metni.value = "ELDEKİ TOPLAM PARA (KASA)"
-                kasa_tutar_metni.value = f"{genel_kasa:,.2f} TL"
+                kasa_baslik_metni.value = "TOPLAM KULLANILABİLİR (NAKİT + BANKA)"
+                kasa_tutar_metni.value = f"{kullanilabilir_ana_kasa:,.2f} TL"
                 kasa_tutar_metni.color = "white"
 
-                donem_kasa_cikisi = donem_kasa_harcamasi + sum(donem_kullaniciya_aktarilan.values())
-                donem_fark = donem_gelir - donem_kasa_cikisi
-
+                donem_fark = donem_gelir - donem_gider
                 bu_ay_gelir_txt.value = f"+{donem_gelir:,.2f} TL"
-                bu_ay_gider_txt.value = f"-{donem_kasa_harcamasi:,.2f} TL"
+                bu_ay_gider_txt.value = f"-{donem_gider:,.2f} TL"
                 bu_ay_fark_txt.value = f"{donem_fark:+,.2f} TL"
                 bu_ay_fark_txt.color = "#10b981" if donem_fark >= 0 else "#f87171"
 
-                uye_cuzdan_metni.value = f"💳 Üye Cüzdanları: {detay_str}" if detay_str else ""
-                uye_cuzdan_metni.visible = bool(detay_str)
+                uye_cuzdan_metni.value = (
+                    f"💵 Nakit Detayı ➔ 👑 Abdurrahman: {net_nakit_abdurrahman:,.2f} TL | "
+                    f"👤 Hatice: {net_nakit_hatice:,.2f} TL • 🏦 Birikim: {net_birikim_hesabi:,.2f} TL"
+                )
+                uye_cuzdan_metni.visible = True
             else:
-                benim_aktarilan = genel_kullaniciya_aktarilan.get(kullanici, 0.0)
-                benim_harcanan = genel_kullanici_harcamalari.get(kullanici, 0.0)
-                benim_kalan = benim_aktarilan - benim_harcanan
-                bu_donem_harcanan = donem_kullanici_harcamalari.get(kullanici, 0.0)
-                bu_donem_aktarilan = donem_kullaniciya_aktarilan.get(kullanici, 0.0)
-
-                kasa_baslik_metni.value = f"{kullanici.upper()} CÜZDANI (KALAN)"
-                kasa_tutar_metni.value = f"{benim_kalan:,.2f} TL"
+                kasa_baslik_metni.value = f"👤 HATİCE NAKİT HESABI (KALAN)"
+                kasa_tutar_metni.value = f"{net_nakit_hatice:,.2f} TL"
                 kasa_tutar_metni.color = "white"
+
+                bu_donem_harcanan = donem_kullanici_harcamalari.get("Hatice", 0.0)
+                bu_donem_aktarilan = donem_kullaniciya_aktarilan.get("Hatice", 0.0)
 
                 bu_ay_gelir_txt.value = f"+{bu_donem_aktarilan:,.2f} TL"
                 bu_ay_gider_txt.value = f"-{bu_donem_harcanan:,.2f} TL"
-                bu_ay_fark_txt.value = f"{benim_kalan:+,.2f} TL"
+                bu_ay_fark_txt.value = f"{net_nakit_hatice:+,.2f} TL"
 
-                uye_cuzdan_metni.value = f"Toplam Harcamanız: {benim_harcanan:,.2f} TL / Kalan: {benim_kalan:,.2f} TL"
+                uye_cuzdan_metni.value = (
+                    f"👑 Abdurrahman Nakit: {net_nakit_abdurrahman:,.2f} TL | "
+                    f"💳 Banka: {net_banka_hesabi:,.2f} TL | 🏦 Birikim: {net_birikim_hesabi:,.2f} TL"
+                )
                 uye_cuzdan_metni.visible = True
 
             # Kategori Özet Rozetini Güncelle
@@ -6599,9 +6925,17 @@ def main(page: ft.Page):
                     page.update()
                     return
 
+                sec_g_hesap = gelir_hedef_hesap.value or f"💵 Nakit Hesap ({kullanici})"
+                if "Birikim" in sec_g_hesap:
+                    gelir_kull_etiket = f"Birikim Hesabı ({kullanici})"
+                elif "Banka" in sec_g_hesap:
+                    gelir_kull_etiket = f"Banka Hesabı ({kullanici})"
+                else:
+                    gelir_kull_etiket = f"Nakit Hesap ({kullanici})"
+
                 suanki_ts = int(time.time())
                 yeni_kayit = {
-                    "kullanici": kullanici,
+                    "kullanici": gelir_kull_etiket,
                     "tur": "Gelir",
                     "tarih": secilen_gelir_tarih[0].strftime("%d.%m.%Y"),
                     "saat": secilen_gelir_saat[0],
@@ -6648,15 +6982,36 @@ def main(page: ft.Page):
                     page.update()
                     return
 
+                kaynak_sec = aktarim_kaynak_hesap.value or f"💵 Nakit Hesap ({kullanici})"
+                hedef_sec = aktarim_alici.value or "🏦 Birikim Hesabı"
+
+                if "Birikim" in kaynak_sec:
+                    kaynak_temiz = f"Birikim Hesabı ({kullanici})"
+                elif "Banka" in kaynak_sec:
+                    kaynak_temiz = f"Banka Hesabı ({kullanici})"
+                else:
+                    kaynak_temiz = f"Nakit Hesap ({kullanici})"
+
+                if "Birikim" in hedef_sec:
+                    hedef_temiz = "Birikim Hesabı"
+                elif "Hatice" in hedef_sec:
+                    hedef_temiz = "Nakit Hesap (Hatice)"
+                elif "Abdurrahman" in hedef_sec:
+                    hedef_temiz = "Nakit Hesap (Abdurrahman)"
+                elif "Banka" in hedef_sec:
+                    hedef_temiz = "Banka Hesabı"
+                else:
+                    hedef_temiz = hedef_sec
+
                 suanki_ts = int(time.time())
                 yeni_kayit = {
-                    "kullanici": kullanici,
+                    "kullanici": kaynak_temiz,
                     "tur": "Para Aktarımı",
                     "tarih": secilen_aktarim_tarih[0].strftime("%d.%m.%Y"),
                     "saat": datetime.datetime.now().strftime("%H:%M"),
-                    "kaynak": aktarim_alici.value,
-                    "gelir_turu": "Harçlık / Aktarım",
-                    "aciklama": aktarim_aciklamasi.value.strip() or "Para Transferi",
+                    "kaynak": f"{kaynak_temiz} ➔ {hedef_temiz}",
+                    "gelir_turu": "Birikim / Hesap Aktarımı" if "Birikim" in hedef_temiz else "Harçlık / Aktarım",
+                    "aciklama": aktarim_aciklamasi.value.strip() or f"{kaynak_temiz} ➔ {hedef_temiz}",
                     "firma": "",
                     "urun": "",
                     "kategori": "Para Aktarımı",
@@ -6719,7 +7074,7 @@ def main(page: ft.Page):
 
                 miktar_tam_metin = f"{miktar_str} {birim_val}".strip() if miktar_str else ""
 
-                secilen_hesap = "Hatice" if "Hatice" in (gider_hesap_secimi.value or "") or "Aile Üyesi" in (gider_hesap_secimi.value or "") else "Abdurrahman"
+                secilen_hesap = gider_kullanici_etiketi_olustur(gider_hesap_secimi.value, kullanici)
 
                 suanki_ts = int(time.time())
                 gider_kat_adi = "Poşet" if any(w in urun_val.lower() for w in ["poşet", "poset"]) else gider_kategori.value
