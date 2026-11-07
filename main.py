@@ -3406,7 +3406,7 @@ def main(page: ft.Page):
                 dinamik_form_alani.content = gider_form_kutusu
             page.update()
 
-        tur_secenekleri = ["Gider", "Gelir", "Para Aktarımı"]
+        tur_secenekleri = ["Gider", "Gelir", "Para Aktarımı"] if yonetici_mi else ["Gider"]
         islem_turu = make_dropdown(
             options=tur_secenekleri,
             value="Gider",
@@ -3425,48 +3425,183 @@ def main(page: ft.Page):
         bu_ay_fark_txt = ft.Text("0,00 TL", size=10.5, weight=ft.FontWeight.BOLD, color="#38bdf8", text_align=ft.TextAlign.CENTER)
 
         hesap_abdurrahman_txt = ft.Text("0,00 TL", size=13, weight=ft.FontWeight.BOLD, color="#60a5fa", text_align=ft.TextAlign.CENTER)
-        hesap_hatice_txt = ft.Text("0,00 TL", size=13, weight=ft.FontWeight.BOLD, color="#34d399", text_align=ft.TextAlign.CENTER)
+        hesap_hatice_txt = ft.Text("0,00 TL", size=24 if not yonetici_mi else 13, weight=ft.FontWeight.BOLD, color="#34d399", text_align=ft.TextAlign.CENTER)
 
-        # Kullanıcı İsteği: Sadece Nakit Hesap olsun, Abdurrahman ve Hatice'nin hesapları toplamı Nakit Hesabı oluştursun!
-        bakiye_karti = ft.Container(
-            content=ft.Column([
-                ft.Row([
-                    ft.Column([
-                        ft.Text("ELDEKİ TOPLAM NAKİT HESAP", size=10.5, weight=ft.FontWeight.BOLD, color="#94a3b8"),
-                        kasa_tutar_metni
-                    ], spacing=2),
-                    ft.Container(
-                        content=ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, color="#38bdf8", size=24),
-                        bgcolor="#1e293b",
-                        border=make_border_all(1, "#334155"),
-                        border_radius=12,
-                        padding=10
-                    )
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                ft.Container(height=4),
-                # Abdurrahman ve Hatice Nakit Hesap Kutucukları (Toplamı Yukarıdaki Ana Nakit Hesabı Oluşturur)
-                ft.Row([
+        # Kullanıcı İsteği:
+        # Hatice kullanıcısı için "👤 HATİCE NAKİT BAKİYESİ" yerine "NAKİT BAKİYEM" yazar.
+        # Sağdaki cüzdan simgesine tıklandığında hesaba gelen para aktarımları (tarih, saat, tutar, açıklama) dökülür.
+        def hatice_aktarimlar_modal_ac(e=None):
+            dokunma_geribildirimi()
+
+            # Hatice'ye gelen tüm para aktarımlarını topla
+            gelen_aktarimlar = []
+            for itm in islemler:
+                t_tur = itm.get("tur")
+                h_b = islem_hesap_bilgisi_coz(itm, varsayilan_kullanici="Hatice")
+                if t_tur == "Para Aktarımı":
+                    alici_k = h_b.get("alici") or itm.get("kaynak") or ""
+                    if "hatice" in str(alici_k).lower():
+                        gelen_aktarimlar.append(itm)
+                elif t_tur == "Gelir":
+                    # Hatice adına doğrudan kaydedilmiş bir gelir varsa
+                    if h_b.get("kisi") == "Hatice":
+                        gelen_aktarimlar.append(itm)
+
+            # En yeni aktarım üstte olacak şekilde tarihe göre sırala
+            gelen_aktarimlar.sort(key=islem_siralama_anahtari, reverse=True)
+            toplam_gelen = sum(float(x.get("tutar") or 0.0) for x in gelen_aktarimlar)
+
+            liste_kolon = ft.Column([], spacing=8, scroll=ft.ScrollMode.AUTO)
+
+            if not gelen_aktarimlar:
+                liste_kolon.controls.append(
                     ft.Container(
                         content=ft.Column([
-                            ft.Row([
-                                ft.Icon(ft.Icons.PERSON_ROUNDED, color="#60a5fa", size=15),
-                                ft.Text("👑 Abdurrahman", size=11, color="#bfdbfe", weight=ft.FontWeight.BOLD)
-                            ], spacing=4, alignment=ft.MainAxisAlignment.CENTER),
-                            hesap_abdurrahman_txt
-                        ], spacing=3, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
-                        bgcolor="#1e3a8a",
-                        border=make_border_all(1.2, "#2563eb"),
-                        border_radius=12,
-                        padding=make_padding(6, 8),
-                        expand=1,
-                        height=58,
+                            ft.Icon(ft.Icons.SAVINGS_OUTLINED, size=36, color="#94a3b8"),
+                            ft.Text("Henüz hesabınıza gelen bir para aktarımı bulunmuyor.", size=12, color="#64748b", text_align=ft.TextAlign.CENTER)
+                        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+                        padding=20,
                         alignment=get_alignment_center()
-                    ),
-                    ft.Container(
-                        content=ft.Column([
+                    )
+                )
+            else:
+                for akt in gelen_aktarimlar:
+                    a_tutar = float(akt.get("tutar") or 0.0)
+                    a_tarih = akt.get("tarih") or ""
+                    a_saat = akt.get("saat") or ""
+                    a_ack = akt.get("aciklama") or akt.get("kaynak") or "Nakit Transferi"
+                    gonderen_ad = akt.get("kullanici") or "Abdurrahman"
+                    if gonderen_ad in ["Ev Yöneticisi", "Abdurrahman"]:
+                        gonderen_ad = "Abdurrahman"
+
+                    kart = ft.Container(
+                        content=ft.Row([
                             ft.Row([
-                                ft.Icon(ft.Icons.PERSON_ROUNDED, color="#34d399", size=15),
-                                ft.Text("👤 Hatice", size=11, color="#a7f3d0", weight=ft.FontWeight.BOLD)
+                                ft.Container(
+                                    content=ft.Icon(ft.Icons.ARROW_DOWNWARD_ROUNDED, color="#059669", size=18),
+                                    bgcolor="#d1fae5",
+                                    border_radius=18,
+                                    width=34,
+                                    height=34,
+                                    alignment=get_alignment_center()
+                                ),
+                                ft.Column([
+                                    ft.Text(f"+{a_tutar:,.2f} TL", size=13, weight=ft.FontWeight.BOLD, color="#059669"),
+                                    ft.Text(f"👑 {gonderen_ad} tarafından gönderildi", size=10.5, color="#1e293b", weight=ft.FontWeight.W_500),
+                                    ft.Text(f"📝 {a_ack}", size=10, color="#64748b", max_lines=1)
+                                ], spacing=2)
+                            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                            ft.Text(f"📅 {a_tarih} • 🕒 {a_saat}", size=10, color="#64748b", text_align=ft.TextAlign.RIGHT)
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        bgcolor="#f8fafc",
+                        border=make_border_all(1, "#e2e8f0"),
+                        border_radius=10,
+                        padding=make_padding(10, 8)
+                    )
+                    liste_kolon.controls.append(kart)
+
+            aktarim_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.PAYMENTS_ROUNDED, color="#059669", size=22),
+                    ft.Text("Hesabıma Gelen Para Aktarımları", size=15, weight=ft.FontWeight.BOLD)
+                ], spacing=6),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Text("Toplam Gelen Para:", size=11, color="#065f46", weight=ft.FontWeight.BOLD),
+                                ft.Text(f"+{toplam_gelen:,.2f} TL ({len(gelen_aktarimlar)} işlem)", size=12, color="#047857", weight=ft.FontWeight.BOLD)
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            bgcolor="#d1fae5",
+                            border=make_border_all(1, "#a7f3d0"),
+                            border_radius=8,
+                            padding=make_padding(10, 6)
+                        ),
+                        ft.Text("Tarih ve tutarlara göre aktarım detayları:", size=11, color="#64748b"),
+                        ft.Container(content=liste_kolon, height=280)
+                    ], spacing=8, tight=True),
+                    width=330,
+                    height=360
+                ),
+                actions=[
+                    make_button("Kapat", outlined=True, height=32, on_click=lambda _: close_app_dialog(page, aktarim_dialog))
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+            show_app_dialog(page, aktarim_dialog)
+
+        # Kullanıcı Gizlilik Kuralı:
+        # Hatice kullanıcısı kasadaki toplam parayı veya Abdurrahman'ın gelir/bakiyesini görmez.
+        # Hatice oturumunda sadece Hatice'nin kendi kalan nakit parası görünür.
+        if not yonetici_mi:
+            bakiye_karti = ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        # Sol tarafta simetrik denge için boşluk konteyneri
+                        ft.Container(width=44),
+                        # Ortalanmış başlık ve büyük bakiye tutarı
+                        ft.Column([
+                            ft.Text("NAKİT BAKİYEM", size=11, weight=ft.FontWeight.BOLD, color="#94a3b8", text_align=ft.TextAlign.CENTER),
+                            hesap_hatice_txt
+                        ], spacing=3, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
+                        # Sağ tarafta hesaba gelen para aktarımları geçmişi butonu
+                        ft.Container(
+                            content=ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, color="#34d399", size=24),
+                            bgcolor="#064e3b",
+                            border=make_border_all(1, "#059669"),
+                            border_radius=12,
+                            padding=9,
+                            tooltip="Hesabıma Gelen Para Aktarımlarını Gör",
+                            on_click=hatice_aktarimlar_modal_ac
+                        )
+                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4),
+                bgcolor="#0f172a",
+                border=make_border_all(1, "#1e293b"),
+                border_radius=18,
+                padding=make_padding(16, 18),
+                width=355,
+            )
+        else:
+            bakiye_karti = ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Column([
+                            ft.Text("ELDEKİ TOPLAM NAKİT HESAP", size=10.5, weight=ft.FontWeight.BOLD, color="#94a3b8"),
+                            kasa_tutar_metni
+                        ], spacing=2),
+                        ft.Container(
+                            content=ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, color="#38bdf8", size=24),
+                            bgcolor="#1e293b",
+                            border=make_border_all(1, "#334155"),
+                            border_radius=12,
+                            padding=10
+                        )
+                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Container(height=4),
+                    # Abdurrahman ve Hatice Nakit Hesap Kutucukları (Toplamı Yukarıdaki Ana Nakit Hesabı Oluşturur)
+                    ft.Row([
+                        ft.Container(
+                            content=ft.Column([
+                                ft.Row([
+                                    ft.Icon(ft.Icons.PERSON_ROUNDED, color="#60a5fa", size=15),
+                                    ft.Text("👑 Abdurrahman", size=11, color="#bfdbfe", weight=ft.FontWeight.BOLD)
+                                ], spacing=4, alignment=ft.MainAxisAlignment.CENTER),
+                                hesap_abdurrahman_txt
+                            ], spacing=3, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
+                            bgcolor="#1e3a8a",
+                            border=make_border_all(1.2, "#2563eb"),
+                            border_radius=12,
+                            padding=make_padding(6, 8),
+                            expand=1,
+                            height=58,
+                            alignment=get_alignment_center()
+                        ),
+                        ft.Container(
+                            content=ft.Column([
+                                ft.Row([
+                                    ft.Icon(ft.Icons.PERSON_ROUNDED, color="#34d399", size=15),
+                                    ft.Text("👤 Hatice", size=11, color="#a7f3d0", weight=ft.FontWeight.BOLD)
                             ], spacing=4, alignment=ft.MainAxisAlignment.CENTER),
                             hesap_hatice_txt
                         ], spacing=3, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
@@ -6131,6 +6266,15 @@ def main(page: ft.Page):
                     else:
                         donem_kasa_harcamasi += tutar
 
+                # Kullanıcı Gizlilik Kuralı:
+                # Hatice kullanıcısı Abdurrahman'a ait maaş, ek ders veya diğer gelirleri GÖRMEZ!
+                if not yonetici_mi:
+                    if islem_turu_val == "Gelir":
+                        h_kisi_g = h_bilgi.get("kisi", "Abdurrahman")
+                        # Sadece Hatice'nin kendi adına girilmiş bir gelir varsa görür, Abdurrahman'ın gelirlerini asla göremez
+                        if h_kisi_g != "Hatice":
+                            continue
+
                 # 1. Tür Filtresi Kontrolü (Tümü / Gelir / Gider)
                 if secilen_filtre[0] == "Gelir" and islem_turu_val != "Gelir":
                     continue
@@ -6171,6 +6315,10 @@ def main(page: ft.Page):
                 # Tüm zamanlardaki eşleşmeleri bul (böylece aranan ürün geçmişte ne zaman alındıysa görünsün)
                 tum_eslesmeler = []
                 for itm in islemler:
+                    if not yonetici_mi and itm.get("tur") == "Gelir":
+                        itm_kull = str(itm.get("kullanici", "")).lower()
+                        if "hatice" not in itm_kull:
+                            continue
                     i_u = tr_normalize_key(itm.get("urun") or "")
                     i_f = tr_normalize_key(itm.get("firma") or "")
                     i_k = tr_normalize_key(itm.get("kaynak") or "")
@@ -6285,6 +6433,9 @@ def main(page: ft.Page):
                 zaman_metni = f"{t_kisa} {s_str}".strip()
 
                 if islem_turu_val == "Gelir":
+                    # Gizlilik Kuralı: Hatice kullanıcısı Abdurrahman'ın gelirlerini göremez
+                    if not yonetici_mi and h_cozum.get("kisi") != "Hatice":
+                        continue
                     baslik = item.get("kaynak") or "Gelir"
                     ack = item.get("aciklama") or item.get("gelir_turu") or ""
                     alt_detay = f"{zaman_metni} • {ack}" if ack else zaman_metni
@@ -6793,62 +6944,31 @@ def main(page: ft.Page):
 
         yetki_metni = f"👑 {kullanici} (Yönetici Paneli)" if yonetici_mi else f"👤 {kullanici} (Aile Üyesi Paneli)"
 
-        # --- HESAP DEĞİŞTİRME VE ÇIKIŞ MERKEZİ ---
+        # --- GÜVENLİ ÇIKIŞ MERKEZİ (Kullanıcı İsteği: Şifresiz Kolay Geçiş Kapatıldı) ---
         def cikis_yap_aksiyon(e=None):
-            def yoneticiye_gec(ev):
-                close_app_dialog(page, cikis_dialog)
-                oturum_kaydet("Abdurrahman", True)
-                ana_ekrana_git("Abdurrahman", yonetici_mi=True)
-
-            def uyeye_gec(ev):
-                close_app_dialog(page, cikis_dialog)
-                oturum_kaydet("Hatice", False)
-                ana_ekrana_git("Hatice", yonetici_mi=False)
+            dokunma_geribildirimi()
 
             def oturumu_kapat(ev):
                 close_app_dialog(page, cikis_dialog)
                 oturum_sil()
                 giris_ekranina_git()
 
-            diger_rol_btn = make_button(
-                "👑 Abdurrahman Hesabına Geç",
-                icon=ft.Icons.ADMIN_PANEL_SETTINGS,
-                bgcolor="#2563eb",
-                color="white",
-                height=40,
-                on_click=yoneticiye_gec
-            ) if not yonetici_mi else make_button(
-                "👤 Hatice Hesabına Geç",
-                icon=ft.Icons.PERSON,
-                bgcolor="#0284c7",
-                color="white",
-                height=40,
-                on_click=uyeye_gec
-            )
-
             cikis_dialog = ft.AlertDialog(
                 title=ft.Row([
-                    ft.Icon(ft.Icons.MANAGE_ACCOUNTS, color="#2563eb", size=24),
-                    ft.Text("Hesap Değiştir / Çıkış", size=16, weight=ft.FontWeight.BOLD)
+                    ft.Icon(ft.Icons.LOGOUT_ROUNDED, color="#ef4444", size=22),
+                    ft.Text("Güvenli Çıkış Yap", size=16, weight=ft.FontWeight.BOLD)
                 ], spacing=8),
                 content=ft.Container(
                     content=ft.Column([
-                        ft.Text(f"Aktif Hesap: {kullanici} ({'Ev Yöneticisi' if yonetici_mi else 'Aile Üyesi'})", size=11, color="#64748b"),
-                        ft.Container(height=4),
-                        diger_rol_btn,
-                        make_button(
-                            "🚪 Tamamen Çıkış Yap (Giriş Ekranı)",
-                            icon=ft.Icons.LOGOUT,
-                            outlined=True,
-                            height=38,
-                            on_click=oturumu_kapat
-                        )
+                        ft.Text(f"Aktif Hesap: {kullanici}", size=12, weight=ft.FontWeight.W_600, color="#1e293b"),
+                        ft.Text("Hesap değiştirmek veya çıkış yapmak için oturumu kapatmanız gerekmektedir. Şifreniz olmadan diğer hesaba geçiş yapılamaz.", size=11, color="#64748b"),
                     ], spacing=8, tight=True),
                     width=320,
                     padding=4
                 ),
                 actions=[
-                    make_button("✕ İptal", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, cikis_dialog))
+                    make_button("İptal", height=32, outlined=True, on_click=lambda _: close_app_dialog(page, cikis_dialog)),
+                    make_button("🚪 Oturumu Kapat", height=32, bgcolor="#ef4444", color="white", on_click=oturumu_kapat)
                 ],
                 actions_alignment=ft.MainAxisAlignment.END
             )
@@ -7313,6 +7433,9 @@ def main(page: ft.Page):
                     h_coz = islem_hesap_bilgisi_coz(item, varsayilan_kullanici="Abdurrahman")
 
                     if tur == "Gelir":
+                        # Gizlilik: Hatice Abdurrahman'ın gelirlerini istatistikte de göremez
+                        if not yonetici_mi and h_coz.get("kisi") != "Hatice":
+                            continue
                         toplam_gelir += tutar
                     elif tur == "Gider":
                         toplam_gider += tutar
@@ -8559,9 +8682,9 @@ def main(page: ft.Page):
                         ),
                         ft.Divider(height=6, color="#e2e8f0"),
                         ft.ListTile(
-                            leading=ft.Icon(ft.Icons.MANAGE_ACCOUNTS_ROUNDED, color="#dc2626"),
-                            title=ft.Text("Hesap Değiştir / Çıkış", size=13, weight=ft.FontWeight.W_600),
-                            subtitle=ft.Text(f"Aktif: {kullanici}", size=10, color="#64748b"),
+                            leading=ft.Icon(ft.Icons.LOGOUT_ROUNDED, color="#ef4444"),
+                            title=ft.Text("Oturumu Kapat (Güvenli Çıkış)", size=13, weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text(f"Aktif Kullanıcı: {kullanici}", size=10, color="#64748b"),
                             on_click=lambda _: menu_aksiyon_calistir(cikis_yap_aksiyon)
                         )
                     ], spacing=0, scroll=ft.ScrollMode.AUTO),
@@ -9074,33 +9197,21 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                 hata_mesaji.value = "Hatalı kullanıcı adı veya şifre!"
                 page.update()
 
-        def hizli_yonetici_giris(ev):
-            if beni_hatirla.value:
-                oturum_kaydet("Abdurrahman", True)
-            ana_ekrana_git("Abdurrahman", yonetici_mi=True)
 
-        def hizli_uye_giris(ev):
-            if beni_hatirla.value:
-                oturum_kaydet("Hatice", False)
-            ana_ekrana_git("Hatice", yonetici_mi=False)
 
         page.add(
             ft.Column([
                 ft.Container(height=40),
                 ft.Text("🏠 Hane Bütçesi Giriş", size=24, weight=ft.FontWeight.BOLD),
+                ft.Container(height=6),
+                ft.Text("Devam etmek için kullanıcı adı ve şifrenizi giriniz:", size=11.5, color="#64748b"),
                 ft.Container(height=10),
                 kullanici_adi,
                 sifre,
                 ft.Container(content=ft.Row([beni_hatirla], alignment=ft.MainAxisAlignment.START), width=320),
-                ft.Container(height=5),
-                make_button("Giriş Yap", icon=ft.Icons.LOGIN, bgcolor="blue", color="white", width=320, height=45, on_click=giris_yap),
-                hata_mesaji,
-                ft.Divider(height=24, color="#e2e8f0"),
-                ft.Text("⚡ Tek Tıkla Hızlı Hesap Girişi:", size=11, color="#64748b", weight=ft.FontWeight.W_600),
-                ft.Row([
-                    make_button("👑 Abdurrahman (Yönetici)", bgcolor="#2563eb", color="white", height=36, on_click=hizli_yonetici_giris),
-                    make_button("👤 Hatice (Aile Üyesi)", bgcolor="#0284c7", color="white", height=36, on_click=hizli_uye_giris),
-                ], alignment=ft.MainAxisAlignment.CENTER, spacing=10)
+                ft.Container(height=8),
+                make_button("Giriş Yap", icon=ft.Icons.LOGIN, bgcolor="#2563eb", color="white", width=320, height=45, on_click=giris_yap),
+                hata_mesaji
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER)
         )
 
