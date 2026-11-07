@@ -1741,15 +1741,23 @@ VARSAYILAN_GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 def gemini_api_key_al():
     """Kullanıcının yerel olarak saklanan veya ortamdaki Gemini API anahtarını güvenle çeker."""
-    if os.path.exists(GEMINI_KEY_DOSYASI):
-        try:
-            with open(GEMINI_KEY_DOSYASI, "r", encoding="utf-8") as f:
-                d = json.load(f)
-                k = d.get("api_key", "").strip()
-                if k:
-                    return k
-        except Exception:
-            pass
+    olasi_yollar = [
+        GEMINI_KEY_DOSYASI,
+        os.path.join(BASE_DIR, "gemini_key.json"),
+        os.path.join(os.getcwd(), "gemini_key.json"),
+        "gemini_key.json"
+    ]
+    for yp in olasi_yollar:
+        if os.path.exists(yp):
+            try:
+                with open(yp, "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                    k = d.get("api_key", "").strip()
+                    if k:
+                        return k
+            except Exception:
+                pass
+
     if "GEMINI_API_KEY" in os.environ and os.environ["GEMINI_API_KEY"].strip():
         return os.environ["GEMINI_API_KEY"].strip()
     return VARSAYILAN_GEMINI_KEY
@@ -1767,66 +1775,56 @@ def gemini_api_key_kaydet(key_val):
 GEMINI_API_KEY = gemini_api_key_al()
 
 def gemini_aktif_modelleri_bul(api_key, ssl_context=None):
-    """Kullanıcının API anahtarına tanımlı modelleri Google'dan çeker ve yalnızca ücretsiz/hızlı Gemini Flash modellerini seçer."""
+    """Kullanıcının anahtarıyla Google'a ListModels sorarak HESAPTA GERÇEKTEN AÇIK olan modelleri çeker (404 hatasını %100 bitirir)."""
     import urllib.request
     import json
+
     bulunanlar = []
     kw = {"timeout": 10}
     if ssl_context:
         kw["context"] = ssl_context
 
     for ver in ["v1beta", "v1"]:
-        url = f"https://generativelanguage.googleapis.com/{ver}/models"
-        req = urllib.request.Request(url, headers={"x-goog-api-key": api_key})
+        url = f"https://generativelanguage.googleapis.com/{ver}/models?key={api_key}"
+        req = urllib.request.Request(url, headers={"Content-Type": "application/json", "x-goog-api-key": api_key})
         try:
             with urllib.request.urlopen(req, **kw) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                for m in data.get("models", []):
+                res_data = json.loads(resp.read().decode("utf-8"))
+                for m in res_data.get("models", []):
                     methods = m.get("supportedGenerationMethods", [])
                     if "generateContent" in methods:
                         m_name = m.get("name", "").replace("models/", "")
                         m_low = m_name.lower()
-                        # Yalnızca saf Gemini modelleri (gemma vb. hariç)
-                        if not m_low.startswith("gemini-"):
-                            continue
-                        # Ücretsiz planda kotası 0 olan veya görsel almayan modelleri filtrele
-                        if any(x in m_low for x in ["-tts", "embedding", "aqa", "imagen", "-image", "-pro"]):
-                            continue
-                        if "flash" in m_low:
+                        if "gemini" in m_low and not any(x in m_low for x in ["embedding", "aqa", "imagen", "tts"]):
                             bulunanlar.append((ver, m_name))
                 if bulunanlar:
-                    print(f"📋 Google'dan {len(bulunanlar)} adet aktif Gemini Flash modeli listelendi ({ver}).")
+                    print(f"📋 Hesabınızda açık olan {len(bulunanlar)} adet aktif model bulundu ({ver}).")
                     break
-        except Exception as ex:
-            print(f"ListModels ({ver}) denemesi:", ex)
+        except Exception as ex_list:
+            print(f"ListModels ({ver}) denemesi:", ex_list)
 
-    # Gerçek, en güncel ve hızlı Google Gemini Flash modelleri
-    oncelik = [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-flash-8b",
-        "gemini-flash-latest"
-    ]
-    sirali = []
-    for p in oncelik:
-        for v, name in bulunanlar:
-            if p == name or p in name:
-                if (v, name) not in sirali:
-                    sirali.append((v, name))
-    for item in bulunanlar:
-        if item not in sirali:
-            sirali.append(item)
-
-    if not sirali:
-        sirali = [
-            ("v1beta", "gemini-2.0-flash"),
+    if not bulunanlar:
+        # Fallback standart modeller
+        bulunanlar = [
+            ("v1beta", "gemini-3.5-flash-lite"),
+            ("v1beta", "gemini-3.1-flash-lite"),
+            ("v1beta", "gemini-3-flash"),
+            ("v1beta", "gemini-2.5-flash"),
             ("v1beta", "gemini-1.5-flash"),
-            ("v1beta", "gemini-1.5-flash-latest"),
-            ("v1beta", "gemini-flash-latest"),
             ("v1", "gemini-1.5-flash")
         ]
-    return sirali
+
+    # En yüksek kotalı ve en hızlı modelleri (Lite -> Flash) öne al
+    def model_oncelik(item):
+        m = item[1].lower()
+        if "lite" in m:
+            return 0
+        elif "flash" in m:
+            return 1
+        return 2
+
+    bulunanlar.sort(key=model_oncelik)
+    return bulunanlar
 
 def kategori_akilli_duzelt(urun_adi, firma="", mevcut_kat=""):
     """Ürün ve firma adından harcama kategorisini %100 doğrulukla tespit eder veya düzeltir."""
@@ -1960,8 +1958,8 @@ def gemini_fis_analiz_et(gorsel_yolu, api_key=None, status_cb=None):
     import ssl
     import io
 
-    if not api_key:
-        return {"hata": "Gemini API anahtarı tanımlanmamış."}
+    if not api_key or not str(api_key).strip():
+        return {"hata": "API_KEY_YOK"}
 
     if not os.path.exists(gorsel_yolu):
         return {"hata": f"Dosya bulunamadı: {gorsel_yolu}"}
@@ -2095,9 +2093,9 @@ KATEGORİ KURALLARI (ÇOK ÖNEMLİ):
 
     for api_ver, model in modeller:
         if status_cb:
-            status_cb(f"🌐 Fiş okunuyor ({model})...")
+            status_cb(f"🌐 Fiş analiz ediliyor ({model})...")
 
-        url = f"https://generativelanguage.googleapis.com/{api_ver}/models/{model}:generateContent"
+        url = f"https://generativelanguage.googleapis.com/{api_ver}/models/{model}:generateContent?key={api_key}"
         print(f"🤖 Gemini ({api_ver}/{model}) modeline istek gönderiliyor...")
         req = urllib.request.Request(
             url,
@@ -2109,7 +2107,7 @@ KATEGORİ KURALLARI (ÇOK ÖNEMLİ):
             method="POST"
         )
         try:
-            kw = {"timeout": 25}
+            kw = {"timeout": 20}
             if ssl_context:
                 kw["context"] = ssl_context
             with urllib.request.urlopen(req, **kw) as resp:
@@ -2128,7 +2126,6 @@ KATEGORİ KURALLARI (ÇOK ÖNEMLİ):
                             text_val = text_val[:-3]
                         text_val = text_val.strip()
                         parsed = json.loads(text_val)
-                        # Kategorileri akıllı kurallarla düzelt ve doğrula
                         firma_adi = parsed.get("firma") or "Market"
                         for u_item in parsed.get("urunler", []):
                             u_item["kategori"] = kategori_akilli_duzelt(u_item.get("urun"), firma=firma_adi, mevcut_kat=u_item.get("kategori"))
@@ -2137,8 +2134,9 @@ KATEGORİ KURALLARI (ÇOK ÖNEMLİ):
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8") if hasattr(e, "read") else str(e)
             print(f"⚠️ {model} HTTP Hatası ({e.code}):", err_body[:160])
-            son_hata = f"HTTP {e.code}: {err_body[:160]}"
-            # 503 (geçici yoğunluk), 429 (kota sınırı), 404 (model kapalı), 400 (desteklenmeyen girdi) durumlarında vakit kaybetmeden sonraki çalışan modele geç
+            son_hata = f"HTTP {e.code}: {err_body[:140]}"
+            if e.code in (400, 403) and ("API_KEY_INVALID" in err_body or "API key not valid" in err_body):
+                return {"hata": "API_KEY_INVALID"}
             continue
         except Exception as e:
             print(f"⚠️ {model} Bağlantı Hatası:", e)
@@ -2542,7 +2540,6 @@ def main(page: ft.Page):
         except Exception as ex_pk_res:
             print("Picker sonucu işleme hatası:", ex_pk_res)
 
-    galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
     # CSV Analizi İşlemci Referansı ve Global CSV Seçici Servisi
     csv_islemci_tetikleyici = [None]
 
@@ -2564,6 +2561,7 @@ def main(page: ft.Page):
                 if csv_islemci_tetikleyici[0]:
                     csv_islemci_tetikleyici[0](dosya_yolu=secilen_yol, ham_metin=ham_metin)
 
+    galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
     csv_picker = ft.FilePicker(on_result=on_csv_secimi_tamamlandi)
     # FilePicker'ları sayfa servislerine ekle
     if hasattr(page, "services"):
@@ -2614,9 +2612,13 @@ def main(page: ft.Page):
         # FilePicker'ların overlay içinde olduğunu teyit et
         # FilePicker overlay kaldırıldı (Kırmızı hata kesin olarak önlendi)
 
-        # FilePicker nesnelerini sayfa hiyerarşisine görünmez olarak ekle (Android'de garantili tetikleme sağlar ve kırmızı hata vermez)
-        picker_tutucu = ft.Container(content=ft.Row([galeri_picker, csv_picker], visible=False), visible=False)
-        page.add(picker_tutucu)
+        # FilePicker'ları sayfa servislerine bağla
+        for _pk in (galeri_picker, csv_picker):
+            if hasattr(page, "services") and _pk not in page.services:
+                try:
+                    page.services.append(_pk)
+                except Exception:
+                    pass
         aktif_tema_modu = tema_oku()
         if aktif_tema_modu == "light":
             page.theme_mode = ft.ThemeMode.LIGHT
@@ -4536,15 +4538,24 @@ def main(page: ft.Page):
                     if iptal_edildi[0]:
                         return
 
-                    close_app_dialog(page, yukleniyor_dialog)
-
                     if not tum_sonuclar:
-                        show_app_snackbar(
-                            page,
-                            "⚠️ Fiş okunamadı. Lütfen Gemini API anahtarınızı Fiş Tara ekranındaki anahtar alanına girdiğinizden emin olun.",
-                            color="#ef4444"
-                        )
+                        hata_detay = son_hata_yakala[0]
+                        if hata_detay == "API_KEY_YOK" or "anahtarı tanımlanmamış" in hata_detay:
+                            msg = "⚠️ Gemini API anahtarı girilmemiş! Lütfen Fiş Tara ekranından anahtarınızı kaydediniz."
+                        elif "400" in hata_detay or "API_KEY_INVALID" in hata_detay or "403" in hata_detay:
+                            msg = "⚠️ Google API anahtarını reddetti (Geçersiz/İptal). Lütfen AI Studio'dan yeni anahtar alıp kaydediniz."
+                        elif hata_detay:
+                            msg = f"⚠️ Fiş okuma hatası: {hata_detay[:120]}"
+                        else:
+                            msg = "⚠️ Görselden fiş verisi okunamadı. Fiş net olmayabilir."
+
+                        status_guncelle(f"❌ {msg}")
+                        time.sleep(4.0)
+                        close_app_dialog(page, yukleniyor_dialog)
+                        show_app_snackbar(page, msg, color="#ef4444")
                         return
+
+                    close_app_dialog(page, yukleniyor_dialog)
 
                     # --- MÜKERRER KONTROLÜ VE ÖZET DERLEME ---
                     # Her ürünün sistemde (islemler) birebir aynı tarih, saat, firma veya tutarda olup olmadığı kontrol edilir
@@ -4639,65 +4650,38 @@ def main(page: ft.Page):
                                 rozet = "✨ [YENİ] "
                                 label_color = "#1e293b"
 
+                            # Ürün etiketini ve tutarını düzgün satır kaydırma ile yerleştir
                             chk = ft.Checkbox(
                                 value=chk_val,
-                                label=f"{rozet}{u_adi} ({u_miktar}) - {u_tutar:,.2f} TL"
+                                label="",
+                                scale=0.9
                             )
 
-                            mevcut_katlar = kategoriler_oku()
-                            if u_kat not in mevcut_katlar:
-                                mevcut_katlar.insert(0, u_kat)
-
-                            kat_dd = make_dropdown(
-                                options=mevcut_katlar,
-                                value=u_kat,
-                                width=175,
-                                dense=True
-                            )
-
-                            # Kategori önerisi kontrolü
-                            oneri_kategori_adi = str(u.get("oneri_kategori") or "").strip()
-                            oneri_btn = None
-                            if oneri_kategori_adi and oneri_kategori_adi not in mevcut_katlar:
-                                def oneri_kategori_ekle_aksiyon(ev, o_kat=oneri_kategori_adi, target_dd=kat_dd):
-                                    dokunma_geribildirimi()
-                                    kategori_ekle(o_kat)
-                                    target_dd.options = [make_option(k) for k in kategoriler_oku()]
-                                    target_dd.value = o_kat
-                                    show_app_snackbar(page, f"✅ '{o_kat}' kategorisi eklendi ve seçildi!", color="#10b981")
-                                    try:
-                                        target_dd.update()
-                                    except Exception:
-                                        pass
-
-                                oneri_btn = ft.Container(
-                                    content=ft.Row([
-                                        ft.Icon(ft.Icons.LIGHTBULB_ROUNDED, size=13, color="#b45309"),
-                                        ft.Text(f"💡 '{oneri_kategori_adi}' Ekle", size=10, color="#b45309", weight=ft.FontWeight.BOLD)
-                                    ], spacing=2),
-                                    bgcolor="#fef3c7",
-                                    border=make_border_all(1, "#fde68a"),
-                                    border_radius=6,
-                                    padding=make_padding(6, 2),
-                                    tooltip=f"'{oneri_kategori_adi}' kategorisini uygulamaya ekle ve bu ürüne ata",
-                                    on_click=oneri_kategori_ekle_aksiyon
-                                )
+                            urun_baslik_satiri = ft.Row([
+                                chk,
+                                ft.Column([
+                                    ft.Text(f"{rozet}{u_adi}", size=11.5, weight=ft.FontWeight.W_600, color=label_color),
+                                    ft.Row([
+                                        ft.Text(f"Miktar: {u_miktar}", size=10, color="#64748b"),
+                                        ft.Text(f"• Tutar: {u_tutar:,.2f} TL", size=10.5, weight=ft.FontWeight.BOLD, color="#b91c1c")
+                                    ], spacing=4)
+                                ], spacing=1, expand=True)
+                            ], vertical_alignment=ft.CrossAxisAlignment.START, spacing=4)
 
                             urun_satiri = ft.Container(
                                 content=ft.Column([
-                                    chk,
+                                    urun_baslik_satiri,
                                     ft.Row([
-                                        ft.Text("Kategori:", size=10.5, color="#64748b", weight=ft.FontWeight.W_500),
+                                        ft.Text("Kategori:", size=10, color="#64748b", weight=ft.FontWeight.W_500),
                                         kat_dd,
                                         oneri_btn if oneri_btn else ft.Container()
-                                    ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-                                ], spacing=2),
+                                    ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                                ], spacing=3),
                                 bgcolor="#ffffff" if not zaten_kayitli else "#fff1f2",
                                 border=make_border_all(1, "#e2e8f0" if not zaten_kayitli else "#fecaca"),
                                 border_radius=8,
-                                padding=make_padding(6, 4)
+                                padding=make_padding(8, 6)
                             )
-
                             toplu_onay_verileri.append({
                                 "f_idx": f_idx,
                                 "chk": chk,
@@ -4953,12 +4937,12 @@ def main(page: ft.Page):
                                 fis_hesap_dd,
                                 ft.Container(
                                     content=ft.Column(toplu_urun_kartlari, scroll=ft.ScrollMode.AUTO, spacing=8),
-                                    height=300,
+                                    height=380,
                                     padding=2
                                 )
                             ], spacing=8),
-                            width=345,
-                            height=380
+                            width=410,
+                            height=480
                         ),
                         actions=[
                             make_button("✕ İptal", height=34, outlined=True, on_click=lambda _: close_app_dialog(page, toplu_fis_dialog)),
@@ -5006,6 +4990,7 @@ def main(page: ft.Page):
                 close_app_dialog(page, fis_dialog)
                 show_app_snackbar(page, "📂 Fiş seçici açılıyor...", color="#2563eb")
 
+                # Masaüstünde tkinter seçici
                 if not platform_mobil_mi():
                     try:
                         import tkinter as tk
@@ -5026,8 +5011,10 @@ def main(page: ft.Page):
                     except Exception as ex_tk:
                         pass
 
-                # Mobilde garantili FilePicker tetikleme
+                # Mobilde (Android) FilePicker tetikleme
                 try:
+                    if hasattr(page, "services") and galeri_picker not in page.services:
+                        page.services.append(galeri_picker)
                     galeri_picker.pick_files(
                         dialog_title="Fiş Fotoğrafı Seçin",
                         allow_multiple=True
