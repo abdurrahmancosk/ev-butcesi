@@ -1,10 +1,6 @@
-*.json
-*.csv
-*.db
-*.sqlite3
-__pycache__/
-*.bat
-*.vbs
-build/
-dist/
-.flet/
+*
+!main.py
+!requirements.txt
+!.github/
+!.github/**
+!.gitignore
