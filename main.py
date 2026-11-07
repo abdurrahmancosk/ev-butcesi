@@ -2607,11 +2607,11 @@ def main(page: ft.Page):
         page.clean()
         page.scroll = ft.ScrollMode.AUTO
         # page.clean() sonrası FilePicker servislerini yeniden bağla (Kamera & Galeri seçicinin her zaman tepki vermesi için)
-        # FilePicker servislerini Flet mobil mimarisine uygun şekilde overlay listesine güvenle bağla
+        # FilePicker servislerini sayfa servisine bağla (Overlay'e ASLA eklenmez, kırmızı hatayı önler)
         for _pk in (galeri_picker, csv_picker):
             try:
-                if hasattr(page, "overlay") and _pk not in page.overlay:
-                    page.overlay.append(_pk)
+                if hasattr(page, "services") and _pk not in page.services:
+                    page.services.append(_pk)
             except Exception:
                 pass
 
@@ -5004,16 +5004,14 @@ def main(page: ft.Page):
                 close_app_dialog(page, fis_dialog)
                 show_app_snackbar(page, "📂 Fiş seçici açılıyor...", color="#2563eb")
 
-                # Mobilde hazır galeri_picker servisini tetikle
                 try:
-                    if hasattr(page, "overlay") and galeri_picker not in page.overlay:
-                        page.overlay.append(galeri_picker)
+                    if hasattr(page, "services") and galeri_picker not in page.services:
+                        page.services.append(galeri_picker)
                     galeri_picker.pick_files(
                         dialog_title="Fiş Fotoğrafı Seçin",
                         file_type=ft.FilePickerFileType.IMAGE,
                         allow_multiple=True
                     )
-                    page.update()
                 except Exception as ex_pk_call:
                     print("pick_files hata:", ex_pk_call)
 
@@ -6893,6 +6891,7 @@ def main(page: ft.Page):
                         print("Bulut kayıt hatası:", ex)
 
                 islemler.insert(0, yeni_kayit)
+                islemler_yerel_cache_kaydet(islemler)
                 bildirim_olustur_ve_gonder(yeni_kayit, gonderen=kullanici)
                 gelir_kaynagi.value = ""
                 gelir_aciklamasi.value = ""
@@ -7032,6 +7031,7 @@ def main(page: ft.Page):
                         print("Bulut kayıt hatası:", ex)
 
                 islemler.insert(0, yeni_kayit)
+                islemler_yerel_cache_kaydet(islemler)
                 bildirim_olustur_ve_gonder(yeni_kayit, gonderen=kullanici)
 
                 # Fiyat Karşılaştırması Bilgilendirmesi (Ucuz veya Pahalıysa göster, aynıysa gösterme)
@@ -9186,19 +9186,19 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
         def arka_plan_bildirim_tara():
             while True:
                 try:
-                    time.sleep(5)
+                    time.sleep(3)
                     if not supabase:
                         continue
-                    res = supabase.table("islemler").select("*").order("id", desc=True).limit(30).execute()
+                    res = supabase.table("islemler").select("*").order("id", desc=True).limit(35).execute()
                     if res and res.data:
                         degisiklik_var = False
                         for it in res.data:
                             it_id_str = str(it.get("id"))
                             if it_id_str and it_id_str not in bilinen_islem_idler:
                                 bilinen_islem_idler.add(it_id_str)
-                                degisiklik_var = True
                                 if not any(str(x.get("id")) == it_id_str for x in islemler):
                                     islemler.insert(0, it)
+                                    degisiklik_var = True
 
                                 it_kull = str(it.get("kullanici", "")).strip()
                                 tur_it = it.get("tur", "Gider")
@@ -9237,6 +9237,10 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                             islemler_yerel_cache_kaydet(islemler)
                             bildirim_sayaci_guncelle()
                             arayuzu_guncelle()
+                            try:
+                                page.update()
+                            except Exception:
+                                pass
                 except Exception as ex_tara:
                     pass
 
