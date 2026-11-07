@@ -909,7 +909,7 @@ def son_gorselleri_bul(limit=6):
         "."
     ]
     bulunanlar = []
-    uzantilar = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".pdf")
+    uzantilar = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic")
     for k in klasorler:
         if os.path.exists(k) and os.path.isdir(k):
             try:
@@ -5053,7 +5053,7 @@ def main(page: ft.Page):
                         root.attributes("-topmost", True)
                         dy_list = filedialog.askopenfilenames(
                             title="Fiş Görseli Seçin",
-                            filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
+                            filetypes=[("Resim Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic"), ("Tüm Dosyalar", "*.*")]
                         )
                         root.destroy()
                         if dy_list:
@@ -5064,7 +5064,7 @@ def main(page: ft.Page):
                     except Exception as ex_tk:
                         pass
 
-                # Mobilde (Android) FilePicker tetikleme (Yalnızca Resim Modu & with_data=True)
+                # Mobilde (Android) FilePicker tetikleme (Salt Resim, with_data=True, Doğrudan/Async Çift Kanallı Yakalama)
                 try:
                     if hasattr(page, "services") and galeri_picker not in page.services:
                         page.services.append(galeri_picker)
@@ -5072,26 +5072,53 @@ def main(page: ft.Page):
                         page._services.append(galeri_picker)
 
                     img_ft = ft.FilePickerFileType.IMAGE if hasattr(ft, "FilePickerFileType") else "image"
+                    res = None
                     try:
-                        galeri_picker.pick_files(
+                        res = galeri_picker.pick_files(
                             dialog_title="Fiş Fotoğrafı Seçin",
                             file_type=img_ft,
                             with_data=True,
                             allow_multiple=True
                         )
                     except TypeError:
-                        galeri_picker.pick_files(
+                        res = galeri_picker.pick_files(
                             dialog_title="Fiş Fotoğrafı Seçin",
                             file_type=img_ft,
                             allow_multiple=True
                         )
+
+                    # Flet 0.80+ / 1.0 Doğrudan Sonuç Döndürme veya Async Coroutine Yakalama
+                    import asyncio
+                    import inspect
+
+                    def _secilenleri_isle_hemen(val):
+                        if val:
+                            on_galeri_secimi_tamamlandi(val)
+
+                    if inspect.iscoroutine(res) or asyncio.iscoroutine(res):
+                        async def _coro_bekle():
+                            try:
+                                s = await res
+                                _secilenleri_isle_hemen(s)
+                            except Exception as ex_coro:
+                                print("Coroutine picker hatası:", ex_coro)
+                        if hasattr(page, "run_task"):
+                            page.run_task(_coro_bekle)
+                        else:
+                            import threading
+                            threading.Thread(target=lambda: asyncio.run(_coro_bekle()), daemon=True).start()
+                    elif res:
+                        _secilenleri_isle_hemen(res)
+
                 except Exception as ex_p:
                     print("Galeri seçici tetikleme hatası:", ex_p)
                     try:
-                        galeri_picker.pick_files(
+                        res_fallback = galeri_picker.pick_files(
                             dialog_title="Fiş Fotoğrafı Seçin",
                             allow_multiple=False
                         )
+                        if res_fallback:
+                            on_galeri_secimi_tamamlandi(res_fallback)
                     except Exception as ex_p2:
                         print("Yedek seçici hatası:", ex_p2)
                         show_app_snackbar(page, "Galeri açılamadı, lütfen depolama izinlerini kontrol edin.", color="#ef4444")
@@ -6762,7 +6789,10 @@ def main(page: ft.Page):
                 liste_kapsayici.update()
             except Exception:
                 pass
-            page.update()
+            try:
+                page.update()
+            except Exception as ex_upd:
+                print("Güvenli arayüz güncelleme uyarısı:", ex_upd)
 
         # --- İŞLEM KAYDETME ---
         def islem_kaydet(e):
