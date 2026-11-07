@@ -2543,13 +2543,7 @@ def main(page: ft.Page):
             print("Picker sonucu işleme hatası:", ex_pk_res)
 
     galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
-    if hasattr(page, "services"):
-        try:
-            if galeri_picker not in page.services:
-                page.services.append(galeri_picker)
-        except Exception:
-            pass
-
+    # CSV Analizi İşlemci Referansı ve Global CSV Seçici Servisi
     csv_islemci_tetikleyici = [None]
 
     def on_csv_secimi_tamamlandi(e):
@@ -2571,13 +2565,8 @@ def main(page: ft.Page):
                     csv_islemci_tetikleyici[0](dosya_yolu=secilen_yol, ham_metin=ham_metin)
 
     csv_picker = ft.FilePicker(on_result=on_csv_secimi_tamamlandi)
-    if hasattr(page, "services"):
-        try:
-            page.services.append(csv_picker)
-        except Exception:
-            pass
-
-
+    # FilePicker'ları sayfa kontrol listesine overlay olarak bağla (Flet resmi dokümantasyonu)
+    page.overlay.extend([galeri_picker, csv_picker])
 
     page.title = "Hane Bütçesi Takip Sistemi"
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
@@ -2618,13 +2607,10 @@ def main(page: ft.Page):
         page.scroll = ft.ScrollMode.AUTO
         # page.clean() sonrası FilePicker servislerini yeniden bağla (Kamera & Galeri seçicinin her zaman tepki vermesi için)
         # FilePicker servislerini sayfa servisine bağla (Overlay'e ASLA eklenmez, kırmızı hatayı önler)
-        # FilePicker servislerini Flet ortamına bağla (Overlay'e ASLA eklenmez, kırmızı hata vermez!)
+        # FilePicker'ların overlay içinde olduğunu teyit et
         for _pk in (galeri_picker, csv_picker):
-            try:
-                if hasattr(page, "services") and _pk not in page.services:
-                    page.services.append(_pk)
-            except Exception:
-                pass
+            if _pk not in page.overlay:
+                page.overlay.append(_pk)
 
         aktif_tema_modu = tema_oku()
         if aktif_tema_modu == "light":
@@ -5023,8 +5009,8 @@ def main(page: ft.Page):
                         root.withdraw()
                         root.attributes("-topmost", True)
                         dy_list = filedialog.askopenfilenames(
-                            title="Bir veya Birden Fazla Fiş Görseli Seçin",
-                            filetypes=[("Resim Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
+                            title="Fiş Görseli Seçin",
+                            filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
                         )
                         root.destroy()
                         if dy_list:
@@ -5033,18 +5019,21 @@ def main(page: ft.Page):
                                 fis_gorselini_tara_ve_goster(gecerli_yollar)
                                 return
                     except Exception as ex_tk:
-                        print("Tkinter seçici uyarısı:", ex_tk)
+                        pass
 
-                # Mobilde hazır galeri_picker servisini tetikle
+                # Mobilde standart Flet FilePicker çağrısı
                 try:
-                    if hasattr(page, "services") and galeri_picker not in page.services:
-                        page.services.append(galeri_picker)
                     galeri_picker.pick_files(
                         dialog_title="Fiş Fotoğraflarını Seçin",
+                        file_type=ft.FilePickerFileType.IMAGE,
                         allow_multiple=True
                     )
-                except Exception as ex_pk_call:
-                    print("pick_files hata:", ex_pk_call)
+                except Exception as ex_p:
+                    # Geri dönüş olarak her türlü dosyaya izin ver
+                    try:
+                        galeri_picker.pick_files(allow_multiple=True)
+                    except Exception:
+                        pass
 
             def metin_coz_tetikle(ev):
                 raw = metin_alani.value.strip()
@@ -5173,6 +5162,17 @@ def main(page: ft.Page):
                     )
                 except Exception as ex_cam_pk:
                     print("Kamera pick_files hatası:", ex_cam_pk)
+
+            dialog_icerik = [
+                make_button(
+                    "📁 Galeriden Fiş Seç (Fotoğraf / PDF)",
+                    icon=ft.Icons.PHOTO_LIBRARY_ROUNDED,
+                    bgcolor="#2563eb",
+                    color="white",
+                    height=46,
+                    on_click=galeri_tiklandi_aksiyon
+                )
+            ]
 
             dialog_icerik = [
                 kamera_durum_kutusu,
