@@ -1572,22 +1572,14 @@ def bildirim_olustur_ve_gonder(islem, gonderen=None):
 # Kapsamlı Standart Harcama Kategorileri (Tüm ev, aile, araç, eğitim ve kişisel harcamaları kapsar)
 VARSAYILAN_GIDER_KATEGORILERI = [
     "Market & Temel Gıda",
-    "Kasap & Şarküteri & Manav",
-    "Fırın & Unlu Mamuller",
     "Abur Cubur & Atıştırmalık",
-    "Poşet",
-    "Ev & Faturalar (Elektrik, Su, Doğalgaz)",
-    "Kira & Aidat",
-    "İnternet, Telefon & TV",
-    "Temizlik & Hijyen",
-    "Kişisel Bakım & Kozmetik",
+    "Kira & Aidat & Faturalar",
+    "Ev",
+    "Temizlik & Hijyen & Kişisel Bakım",
     "Giyim, Ayakkabı & Aksesuar",
     "Sağlık, İlaç & Medikal",
     "Eğitim, Okul & Kırtasiye",
-    "Çocuk & Bebek",
     "Ulaşım & Toplu Taşıma",
-    "Akaryakıt & Yakıt",
-    "Araç Bakım & Muayene & Servis",
     "Dışarıda Yemek & Kafe & Restoran",
     "Eğlence, Kültür & Etkinlik",
     "Elektronik & Teknoloji",
@@ -1595,14 +1587,14 @@ VARSAYILAN_GIDER_KATEGORILERI = [
     "Tadilat, Tamirat & Yapı Market",
     "Evcil Hayvan (Pamuk)",
     "Sigara/Tütün",
-    "Spor, Fitness & Hobi",
     "Tatil & Seyahat & Konaklama",
     "Hediye, Bağış & Yardımlaşma",
     "Kredi Kartı, Kredi Ödemesi & Borç",
     "Vergi, Harç & Resmi İşlemler",
-    "Sigorta, Kasko & Bireysel Emeklilik",
     "Transfer / Birikim",
     "Yatırım & Altın & Döviz",
+    "Poşet",
+    "Oyuncak",
     "Diğer"
 ]
 
@@ -1622,7 +1614,22 @@ def kategoriler_oku():
             with open(KATEGORILER_DOSYASI, "r", encoding="utf-8") as f:
                 veriler = json.load(f)
                 if isinstance(veriler, list) and len(veriler) > 0:
-                    mevcut = veriler
+                    # Eski önbellekte kalmış gereksiz/birleştirilmiş eski kategoriler varsa PC ile senkronize et
+                    eski_kategori_izleri = ["Kasap & Şarküteri & Manav", "Ev & Faturalar (Elektrik, Su, Doğalgaz)", "İnternet, Telefon & TV", "Kira & Aidat"]
+                    if any(x in veriler for x in eski_kategori_izleri):
+                        mevcut = list(VARSAYILAN_GIDER_KATEGORILERI)
+                        # Kullanıcının ekstradan eklediği yeni kategorileri koru
+                        for v in veriler:
+                            if v not in mevcut and v not in eski_kategori_izleri:
+                                if "Diğer" in mevcut:
+                                    mevcut.remove("Diğer")
+                                    mevcut.append(v)
+                                    mevcut.append("Diğer")
+                                else:
+                                    mevcut.append(v)
+                        kategoriler_kaydet(mevcut)
+                    else:
+                        mevcut = veriler
         except Exception:
             pass
     # Kullanıcı Kuralı: Alışveriş poşetleri daima Poşet kategorisinde olmalı
@@ -9231,6 +9238,30 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                             pass
 
                         islemler_yerel_cache_kaydet(islemler)
+
+                        # Buluttan gelen harcamalardaki yeni kategorileri otomatik olarak yerel listeye senkronize et
+                        try:
+                            mevcut_kats = kategoriler_oku()
+                            k_degisti = False
+                            for it in islemler:
+                                if it.get("tur") == "Gider":
+                                    kat_adi = str(it.get("kategori") or "").strip()
+                                    if kat_adi and kat_adi != "None" and kat_adi not in mevcut_kats:
+                                        if "Diğer" in mevcut_kats:
+                                            mevcut_kats.remove("Diğer")
+                                            mevcut_kats.append(kat_adi)
+                                            mevcut_kats.append("Diğer")
+                                        else:
+                                            mevcut_kats.append(kat_adi)
+                                        k_degisti = True
+                            if k_degisti:
+                                kategoriler_kaydet(mevcut_kats)
+                                GIDER_KATEGORILERI.clear()
+                                GIDER_KATEGORILERI.extend(mevcut_kats)
+                                gider_kategori.options = [make_option(c) for c in mevcut_kats]
+                                kategori_filtre_dropdown.options = [make_option(c) for c in (["Tüm Kategoriler"] + mevcut_kats + gelir_turleri_oku())]
+                        except Exception:
+                            pass
 
                         for it in islemler:
                             if it.get("id"):
