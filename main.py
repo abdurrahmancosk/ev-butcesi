@@ -2543,6 +2543,27 @@ def main(page: ft.Page):
             print("Picker sonucu işleme hatası:", ex_pk_res)
 
     galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
+    # CSV Analizi İşlemci Referansı ve Global CSV Seçici Servisi
+    csv_islemci_tetikleyici = [None]
+
+    def on_csv_secimi_tamamlandi(e):
+        if hasattr(e, "files") and e.files and len(e.files) > 0:
+            f = e.files[0]
+            secilen_yol = getattr(f, "path", None)
+            ham_metin = None
+            if hasattr(f, "bytes") and f.bytes:
+                for enc in ["utf-8-sig", "utf-8", "cp1254", "latin1"]:
+                    try:
+                        ham_metin = f.bytes.decode(enc)
+                        break
+                    except Exception:
+                        pass
+                if not ham_metin and f.bytes:
+                    ham_metin = f.bytes.decode("latin1", errors="ignore")
+            if (secilen_yol and os.path.exists(str(secilen_yol))) or ham_metin:
+                if csv_islemci_tetikleyici[0]:
+                    csv_islemci_tetikleyici[0](dosya_yolu=secilen_yol, ham_metin=ham_metin)
+
     csv_picker = ft.FilePicker(on_result=on_csv_secimi_tamamlandi)
     # FilePicker'ları sayfa servislerine ekle
     if hasattr(page, "services"):
