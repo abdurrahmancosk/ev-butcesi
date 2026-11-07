@@ -2565,8 +2565,6 @@ def main(page: ft.Page):
                     csv_islemci_tetikleyici[0](dosya_yolu=secilen_yol, ham_metin=ham_metin)
 
     csv_picker = ft.FilePicker(on_result=on_csv_secimi_tamamlandi)
-    # FilePicker'ları sayfa kontrol listesine overlay olarak bağla (Flet resmi dokümantasyonu)
-    page.overlay.extend([galeri_picker, csv_picker])
 
     page.title = "Hane Bütçesi Takip Sistemi"
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
@@ -2608,9 +2606,7 @@ def main(page: ft.Page):
         # page.clean() sonrası FilePicker servislerini yeniden bağla (Kamera & Galeri seçicinin her zaman tepki vermesi için)
         # FilePicker servislerini sayfa servisine bağla (Overlay'e ASLA eklenmez, kırmızı hatayı önler)
         # FilePicker'ların overlay içinde olduğunu teyit et
-        for _pk in (galeri_picker, csv_picker):
-            if _pk not in page.overlay:
-                page.overlay.append(_pk)
+        # FilePicker overlay kaldırıldı (Kırmızı hata kesin olarak önlendi)
 
         aktif_tema_modu = tema_oku()
         if aktif_tema_modu == "light":
@@ -5170,26 +5166,6 @@ def main(page: ft.Page):
                     bgcolor="#2563eb",
                     color="white",
                     height=46,
-                    on_click=galeri_tiklandi_aksiyon
-                )
-            ]
-
-            dialog_icerik = [
-                kamera_durum_kutusu,
-                make_button(
-                    "📷 Kamerayı Aç & Fiş Çek (Xiaomi Redmi Uyumlu)",
-                    icon=ft.Icons.PHOTO_CAMERA_ROUNDED,
-                    bgcolor="#10b981",
-                    color="white",
-                    height=44,
-                    on_click=redmi_kamera_ac_ve_izle
-                ),
-                make_button(
-                    "📁 Galeriden Fiş Seç (Tekli veya Çoklu Seçim)",
-                    icon=ft.Icons.PHOTO_LIBRARY,
-                    bgcolor="#2563eb",
-                    color="white",
-                    height=42,
                     on_click=galeri_tiklandi_aksiyon
                 )
             ]
