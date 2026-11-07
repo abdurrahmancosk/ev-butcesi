@@ -1737,6 +1737,8 @@ kategoriler = GIDER_KATEGORILERI
 
 GEMINI_KEY_DOSYASI = os.path.join(os.environ.get("FLET_APP_STORAGE_DATA") or BASE_DIR, "gemini_key.json")
 
+VARSAYILAN_GEMINI_KEY = "AQ.Ab8RN6KSod44ubQVBE5AEcAaqi2mtyCEo0lRz3AO0Z2vlSaWnA"
+
 def gemini_api_key_al():
     """Kullanıcının yerel olarak saklanan veya ortamdaki Gemini API anahtarını güvenle çeker."""
     if os.path.exists(GEMINI_KEY_DOSYASI):
@@ -1750,7 +1752,7 @@ def gemini_api_key_al():
             pass
     if "GEMINI_API_KEY" in os.environ and os.environ["GEMINI_API_KEY"].strip():
         return os.environ["GEMINI_API_KEY"].strip()
-    return ""
+    return VARSAYILAN_GEMINI_KEY
 
 def gemini_api_key_kaydet(key_val):
     """API anahtarını cihazın yerel güvenli deposuna kaydeder (GitHub'a asla yüklenmez)."""
@@ -4521,6 +4523,7 @@ def main(page: ft.Page):
             def arka_plan_toplu_tara():
                 try:
                     tum_sonuclar = []
+                    son_hata_yakala = [""]
                     for idx, y in enumerate(yollar_listesi):
                         if iptal_edildi[0]:
                             return
@@ -4532,6 +4535,7 @@ def main(page: ft.Page):
                                 tum_sonuclar.append({"dosya": y, "veri": res})
                             elif res and "hata" in res:
                                 print(f"Fiş {idx+1} hata:", res.get("hata"))
+                                son_hata_yakala[0] = str(res.get("hata"))
                         except Exception as ex_f:
                             print(f"Fiş okuma hatası ({dosya_adi}):", ex_f)
 
@@ -5148,6 +5152,15 @@ def main(page: ft.Page):
                 baslangic_zamani = time.time()
                 guncel_ilk = son_gorselleri_bul(limit=1)
                 onceki_en_yeni_yol = guncel_ilk[0]["yol"] if guncel_ilk else None
+                # Android'de kamera seçiciyi doğrudan tetikle
+                try:
+                    galeri_picker.pick_files(
+                        dialog_title="Fiş Fotoğrafı Çek veya Seç",
+                        file_type=ft.FilePickerFileType.IMAGE,
+                        allow_multiple=False
+                    )
+                except Exception as ex_pk:
+                    print("Kamera pick hatası:", ex_pk)
 
                 # 1. Xiaomi / Redmi yerel Kamera uygulamasını doğrudan açmayı dene
                 kamera_acildi = False
