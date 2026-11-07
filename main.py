@@ -2543,14 +2543,13 @@ def main(page: ft.Page):
             print("Picker sonucu işleme hatası:", ex_pk_res)
 
     galeri_picker = ft.FilePicker(on_result=on_galeri_secimi_tamamlandi)
-    if hasattr(page, "services"):
-        try:
-            if galeri_picker not in page.services:
-                page.services.append(galeri_picker)
-        except Exception:
-            pass
+    # Flet mobil ve masaüstü standart kayıt
+    try:
+        if hasattr(page, "services") and galeri_picker not in page.services:
+            page.services.append(galeri_picker)
+    except Exception:
+        pass
 
-    # CSV Analizi İşlemci Referansı ve Global CSV Seçici Servisi
     csv_islemci_tetikleyici = [None]
 
     def on_csv_secimi_tamamlandi(e):
@@ -2619,10 +2618,16 @@ def main(page: ft.Page):
         page.scroll = ft.ScrollMode.AUTO
         # page.clean() sonrası FilePicker servislerini yeniden bağla (Kamera & Galeri seçicinin her zaman tepki vermesi için)
         # FilePicker servislerini sayfa servisine bağla (Overlay'e ASLA eklenmez, kırmızı hatayı önler)
+        # FilePicker servislerini Flet ortamına güvenle bağla
         for _pk in (galeri_picker, csv_picker):
             try:
                 if hasattr(page, "services") and _pk not in page.services:
                     page.services.append(_pk)
+            except Exception:
+                pass
+            try:
+                if hasattr(page, "overlay") and _pk not in page.overlay:
+                    page.overlay.append(_pk)
             except Exception:
                 pass
 
