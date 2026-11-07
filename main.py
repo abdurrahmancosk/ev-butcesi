@@ -878,22 +878,29 @@ def son_csvleri_bul():
     bulunanlar.sort(key=lambda x: x[0], reverse=True)
     return [yol for _, yol in bulunanlar[:6]]
 
-def son_gorselleri_bul(limit=4):
-    """Telefonda veya bilgisayarda en son çekilen veya indirilen görselleri bulur."""
+def son_gorselleri_bul(limit=6):
+    """Xiaomi Redmi (Redmi Note 9 Pro, Redmi 14C) ve genel Android telefonlarda çekilen veya indirilen görselleri bulur."""
     klasorler = [
+        # Xiaomi Redmi / MIUI / HyperOS Özel Kamera ve Galeri Yolları
         "/storage/emulated/0/DCIM/Camera",
+        "/sdcard/DCIM/Camera",
         "/storage/emulated/0/DCIM/Screenshots",
         "/storage/emulated/0/DCIM",
-        "/storage/emulated/0/Pictures/Screenshots",
-        "/storage/emulated/0/Pictures/Camera",
-        "/storage/emulated/0/Pictures",
-        "/storage/emulated/0/Pictures/Gallery",
+        "/storage/emulated/0/MIUI/Gallery",
         "/storage/emulated/0/MIUI/Gallery/cloud",
+        "/storage/emulated/0/MIUI/Gallery/cloud/owner",
+        "/storage/emulated/0/MIUI/sound_recorder",
+        "/storage/emulated/0/Pictures/Camera",
+        "/storage/emulated/0/Pictures/Screenshots",
+        "/storage/emulated/0/Pictures/Gallery",
+        "/storage/emulated/0/Pictures",
         "/storage/emulated/0/Download",
+        "/storage/emulated/0/Download/Telegram",
+        "/storage/emulated/0/Download/WhatsApp",
         "/storage/emulated/0/Documents",
-        "/sdcard/DCIM/Camera",
         "/sdcard/DCIM/Screenshots",
         "/sdcard/DCIM",
+        "/sdcard/Pictures/Camera",
         "/sdcard/Pictures/Screenshots",
         "/sdcard/Pictures",
         "/sdcard/Download",
@@ -1335,9 +1342,12 @@ def tr_normalize_key(s):
 # ==============================================================================
 def islem_hesap_bilgisi_coz(item, varsayilan_kullanici="Abdurrahman"):
     """
-    Bir işlemin (Gider, Gelir veya Para Aktarımı) hangi hesaba ve hangi kullanıcıya ait olduğunu çözümler.
-    Hesap Türleri: "Nakit Hesap", "Banka Hesabı", "Birikim Hesabı"
-    Kullanıcılar (Nakit için): "Abdurrahman", "Hatice"
+    Kullanıcı Kesin Kuralı (Sadece Tek Nakit Hesap):
+    - Birikim hesabı tamamen kaldırılmıştır.
+    - Sadece Nakit Hesap vardır.
+    - Abdurrahman ve Hatice'nin hesaplarının toplamı Nakit Hesabı oluşturur.
+    - İşlemi kim yapıyorsa (Abdurrahman veya Hatice) onun nakit hesabından düşer/eklenir.
+    - Eşler arası aktarımda gönderenden düşer, alana eklenir. Toplam Nakit değişmez.
     """
     tur = item.get("tur") or "Gider"
     k_raw = str(item.get("kullanici") or "").strip()
@@ -1349,14 +1359,9 @@ def islem_hesap_bilgisi_coz(item, varsayilan_kullanici="Abdurrahman"):
     kay_raw = str(item.get("kaynak") or "").strip()
 
     k_low = tr_lower(k_raw)
-    u_low = tr_lower(u_raw)
-    f_low = tr_lower(f_raw)
-    kat_low = tr_lower(kat_raw)
-    ack_low = tr_lower(ack_raw)
-    gt_low = tr_lower(gt_raw)
     kay_low = tr_lower(kay_raw)
 
-    # Kim yaptı? (Abdurrahman vs Hatice)
+    # İşlemi kim yaptı? (Abdurrahman vs Hatice)
     if "hatice" in k_low or "aile üyesi" in k_low or "aile uyesi" in k_low:
         kisi = "Hatice"
     elif "abdurrahman" in k_low or "ev yöneticisi" in k_low or "ev yoneticisi" in k_low:
@@ -1365,101 +1370,43 @@ def islem_hesap_bilgisi_coz(item, varsayilan_kullanici="Abdurrahman"):
         kisi = varsayilan_kullanici if varsayilan_kullanici in ["Abdurrahman", "Hatice"] else "Abdurrahman"
 
     if tur == "Gider":
-        # 1. Birikim Kasasına Nakit/Banka Aktarımı mı? (Örn: "Birikime Ayrılan Nakit", "Nakit Birikim (Geçen Aydan Kalan)")
-        if "transfer / birikim" in kat_low or "birikime ayrılan" in u_low or "birikime ayrilan" in u_low or "nakit birikim" in u_low:
-            kaynak_h = "Banka Hesabı" if "banka" in k_low or "banka" in f_low else "Nakit Hesap"
-            return {
-                "alt_tur": "Birikime Aktarım",
-                "hesap": kaynak_h,
-                "hedef_hesap": "Birikim Hesabı",
-                "kisi": kisi,
-                "etiket": f"🏦 Birikim Hesabına Aktarım ({kaynak_h} - {kisi})"
-            }
-
-        # 2. Harcama hangi hesaptan yapıldı?
-        if "birikim" in k_low or "birikim kasasından" in u_low or "birikim kasasindan" in u_low or "birikim hesabından" in u_low or "birikim" in ack_low:
-            return {
-                "alt_tur": "Harcama",
-                "hesap": "Birikim Hesabı",
-                "kisi": kisi,
-                "etiket": f"🏦 Birikim Hesabı ({kisi})"
-            }
-        elif "banka" in k_low:
-            return {
-                "alt_tur": "Harcama",
-                "hesap": "Banka Hesabı",
-                "kisi": kisi,
-                "etiket": f"💳 Banka Hesabı ({kisi})"
-            }
-        else:
-            # Varsayılan: Nakit Hesap (İşlemi kim yapıyorsa onun nakit hesabından düşer)
-            return {
-                "alt_tur": "Harcama",
-                "hesap": "Nakit Hesap",
-                "kisi": kisi,
-                "etiket": f"💵 Nakit Hesap ({kisi})"
-            }
-
+        return {
+            "tur": "Gider",
+            "hesap": "Nakit Hesap",
+            "kisi": kisi,
+            "etiket": f"💵 Nakit ({kisi})"
+        }
     elif tur == "Gelir":
-        # Gelir hangi hesaba girdi?
-        if "[birikim" in ack_low or "birikim için" in ack_low or "birikim icin" in ack_low or "birikim hesabı" in k_low:
-            hedef_h = "Birikim Hesabı"
-        elif "[banka" in ack_low or "banka hesabı" in k_low or (any(w in gt_low or w in kay_low or w in ack_low for w in ["maaş", "maas", "ek ders", "ödenek", "odenek", "meb", "banka"]) and "[nakit" not in ack_low and "eldeki nakit" not in kay_low):
-            hedef_h = "Banka Hesabı"
-        else:
-            hedef_h = "Nakit Hesap"
-
         return {
-            "alt_tur": "Gelir",
-            "hesap": hedef_h,
+            "tur": "Gelir",
+            "hesap": "Nakit Hesap",
             "kisi": kisi,
-            "etiket": f"➕ {hedef_h} ({kisi})"
+            "etiket": f"➕ Nakit ({kisi})"
         }
-
     elif tur == "Para Aktarımı":
-        # Kaynak ve Hedef hesap çözümlemesi
-        # Yeni format: kaynak alanına "Banka Hesabı ➔ Birikim Hesabı" veya "Hatice (Nakit Hesap)" yazılabilir
-        kaynak_h = "Nakit Hesap"
-        if "banka" in k_low or "banka" in ack_low or kay_low.startswith("banka"):
-            kaynak_h = "Banka Hesabı"
-        elif "birikim" in k_low or kay_low.startswith("birikim"):
-            kaynak_h = "Birikim Hesabı"
-
-        if "➔" in kay_raw:
-            parts = [p.strip() for p in kay_raw.split("➔")]
-            k_part = parts[0]
-            h_part = parts[1]
+        # Gönderen ve Alan kişi
+        if "hatice" in kay_low:
+            alici = "Hatice"
+        elif "abdurrahman" in kay_low:
+            alici = "Abdurrahman"
         else:
-            k_part = f"{kaynak_h} ({kisi})"
-            h_part = kay_raw or "Hatice (Nakit Hesap)"
+            alici = "Hatice" if kisi == "Abdurrahman" else "Abdurrahman"
 
         return {
-            "alt_tur": "Transfer",
-            "kaynak_detay": k_part,
-            "hedef_detay": h_part,
-            "kisi": kisi,
-            "etiket": f"🔄 {k_part} ➔ {h_part}"
+            "tur": "Para Aktarımı",
+            "gonderen": kisi,
+            "alici": alici,
+            "etiket": f"💸 Aktarım ({kisi} ➔ {alici})"
         }
 
-    return {"alt_tur": "Diğer", "hesap": "Nakit Hesap", "kisi": kisi, "etiket": f"💵 Nakit Hesap ({kisi})"}
+    return {"tur": tur, "hesap": "Nakit Hesap", "kisi": kisi, "etiket": f"💵 Nakit ({kisi})"}
 
 def gider_kullanici_etiketi_olustur(secilen_hesap_str, aktif_kullanici):
-    """
-    Seçilen hesap türüne (Nakit Hesap, Banka Hesabı, Birikim Hesabı) ve aktif kullanıcıya göre
-    veritabanındaki 'kullanici' alanına kaydedilecek standart metni üretir.
-    Varsayılan Nakit Hesap ise işlemi kim yapıyorsa onun nakit hesabından düşer.
-    """
+    """Sadece Abdurrahman veya Hatice."""
     s = tr_lower(secilen_hesap_str)
-    if "birikim" in s:
-        return f"Birikim Hesabı ({aktif_kullanici})"
-    elif "banka" in s:
-        return f"Banka Hesabı ({aktif_kullanici})"
-    elif "hatice" in s:
-        return "Nakit Hesap (Hatice)"
-    elif "abdurrahman" in s:
-        return "Nakit Hesap (Abdurrahman)"
-    else:
-        return f"Nakit Hesap ({aktif_kullanici})"
+    if "hatice" in s:
+        return "Hatice"
+    return "Abdurrahman"
 
 def market_adi_duzelt(ham_firma):
     """Kullanıcı Kuralı: Ertansa gibi marketler otomatik olarak Halk Pazarı veya tanımlı takma adına çevrilir."""
@@ -2693,6 +2640,7 @@ def main(page: ft.Page):
         secilen_donem_bit = [varsayilan_bit]
         tum_zamanlar_modu = [False]
         siralama_en_yeni = [True]  # Varsayılan: Yeniden Eskiye (En yeni harcama üstte)
+        secilen_goruntuleme_limiti = [60]  # Hızlı açılış için başlangıçta 60 kayıt
 
         # 1. ÖNCE YEREL ÖNBELLEKTEN ANINDA YÜKLE (0 Saniye Gecikme - Uygulama açılır açılmaz veriler ekranda!)
         if not islemler:
@@ -3222,13 +3170,12 @@ def main(page: ft.Page):
             vertical_alignment=ft.CrossAxisAlignment.CENTER
         )
         gelir_hedef_hesap = make_dropdown(
-            label="Gelir Hangi Hesaba Eklensin?",
+            label="Gelir Kime Ait? (Nakit Hesaba Eklenecek)",
             options=[
-                f"💵 Nakit Hesap ({kullanici})",
-                "💳 Banka Hesabı",
-                "🏦 Birikim Hesabı (Doğrudan Birikime)"
+                f"👑 Abdurrahman",
+                f"👤 Hatice"
             ],
-            value=f"💵 Nakit Hesap ({kullanici})",
+            value=f"👑 Abdurrahman" if kullanici == "Abdurrahman" else f"👤 Hatice",
             width=320,
             dense=True
         )
@@ -3399,27 +3346,15 @@ def main(page: ft.Page):
 
         diger_kisi = "Hatice" if kullanici == "Abdurrahman" else "Abdurrahman"
         gider_hesap_secimi = make_dropdown(
-            label="Ödeme Hesabı (Varsayılan: Nakit Hesap)",
+            label="Harcayan Kişi (Nakit Hesabından Düşer)",
             options=[
-                f"💵 Nakit Hesap ({kullanici})",
-                "💳 Banka Hesabı",
-                "🏦 Birikim Hesabı (Altın / Döviz / Yatırım)",
-                f"💵 Nakit Hesap ({diger_kisi})"
+                f"👑 Abdurrahman",
+                f"👤 Hatice"
             ],
-            value=f"💵 Nakit Hesap ({kullanici})",
+            value=f"👑 Abdurrahman" if kullanici == "Abdurrahman" else f"👤 Hatice",
             width=320,
             dense=True
         )
-
-        def _kategori_degisti_hesap_oner(ev=None):
-            sec_k = tr_lower(gider_kategori.value or "")
-            if any(w in sec_k for w in ["yatırım", "yatirim", "altın", "altin", "döviz", "doviz"]):
-                show_app_snackbar(
-                    page,
-                    "💡 İpucu: Altın / Döviz gibi yatırımları önceki birikimlerinizden düşmek için '🏦 Birikim Hesabı'nı seçebilirsiniz.",
-                    color="#0284c7"
-                )
-        gider_kategori.on_change = _kategori_degisti_hesap_oner
 
         gider_form_kutusu = ft.Column([
             ft.Text("Tarih ve Saat:", size=12, color="grey"),
@@ -3432,38 +3367,28 @@ def main(page: ft.Page):
             fiyat_satiri
         ], spacing=10, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
 
-        # --- PARA AKTARIMI & BİRİKİM HESABINA AKTARIM ALANLARI ---
-        aktarim_kaynak_hesap = make_dropdown(
-            label="Hangi Hesaptan Aktarılacak? (Kaynak)",
-            options=[
-                f"💵 Nakit Hesap ({kullanici})",
-                "💳 Banka Hesabı",
-                "🏦 Birikim Hesabı"
-            ],
-            value=f"💵 Nakit Hesap ({kullanici})",
+        # --- EŞLER ARASI PARA AKTARIMI ALANLARI (Abdurrahman <-> Hatice) ---
+        aktarim_gonderen = make_dropdown(
+            label="Parayı Gönderen",
+            options=["👑 Abdurrahman", "👤 Hatice"],
+            value="👑 Abdurrahman" if kullanici == "Abdurrahman" else "👤 Hatice",
             width=320,
             dense=True
         )
         aktarim_alici = make_dropdown(
-            label="Nereye / Kime Aktarılacak? (Hedef)",
-            options=[
-                "🏦 Birikim Hesabı (Gelirden / Nakitten Birikime)",
-                "👤 Hatice (Nakit Hesap)",
-                "👑 Abdurrahman (Nakit Hesap)",
-                "💳 Banka Hesabı",
-                "Diğer"
-            ],
-            value="🏦 Birikim Hesabı (Gelirden / Nakitten Birikime)",
+            label="Parayı Alan",
+            options=["👤 Hatice", "👑 Abdurrahman"],
+            value="👤 Hatice" if kullanici == "Abdurrahman" else "👑 Abdurrahman",
             width=320,
             dense=True
         )
         aktarim_tutari = ft.TextField(label="Aktarılan Tutar (TL)", width=320, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
-        aktarim_aciklamasi = ft.TextField(label="Açıklama (Örn: Aylık nakit birikim, Hatice cüzdan aktarımı)", width=320, dense=True)
+        aktarim_aciklamasi = ft.TextField(label="Açıklama (Örn: Haftalık harçlık, pazar parası)", width=320, dense=True)
 
         aktarim_form_kutusu = ft.Column([
-            ft.Text("Hesaplar Arası / Birikime Aktarım Tarihi:", size=12, color="grey"),
+            ft.Text("Para Aktarımı Tarihi:", size=12, color="grey"),
             aktarim_tarih_btn,
-            aktarim_kaynak_hesap,
+            aktarim_gonderen,
             aktarim_alici,
             aktarim_tutari,
             aktarim_aciklamasi
@@ -3499,17 +3424,15 @@ def main(page: ft.Page):
         bu_ay_gider_txt = ft.Text("-0,00 TL", size=10.5, weight=ft.FontWeight.BOLD, color="#f87171", text_align=ft.TextAlign.CENTER)
         bu_ay_fark_txt = ft.Text("0,00 TL", size=10.5, weight=ft.FontWeight.BOLD, color="#38bdf8", text_align=ft.TextAlign.CENTER)
 
-        hesap_nakit_txt = ft.Text("0,00 TL", size=11, weight=ft.FontWeight.BOLD, color="#34d399", text_align=ft.TextAlign.CENTER)
-        hesap_banka_txt = ft.Text("0,00 TL", size=11, weight=ft.FontWeight.BOLD, color="#60a5fa", text_align=ft.TextAlign.CENTER)
-        hesap_birikim_txt = ft.Text("0,00 TL", size=11, weight=ft.FontWeight.BOLD, color="#fbbf24", text_align=ft.TextAlign.CENTER)
-        uye_cuzdan_metni = ft.Text("", size=10.5, color="#cbd5e1")
+        hesap_abdurrahman_txt = ft.Text("0,00 TL", size=13, weight=ft.FontWeight.BOLD, color="#60a5fa", text_align=ft.TextAlign.CENTER)
+        hesap_hatice_txt = ft.Text("0,00 TL", size=13, weight=ft.FontWeight.BOLD, color="#34d399", text_align=ft.TextAlign.CENTER)
 
-        # Lüks Modern Fintech Bakiye Kartı (3 Hesap: Nakit Hesap, Banka Hesabı, Birikim Hesabı)
+        # Kullanıcı İsteği: Sadece Nakit Hesap olsun, Abdurrahman ve Hatice'nin hesapları toplamı Nakit Hesabı oluştursun!
         bakiye_karti = ft.Container(
             content=ft.Column([
                 ft.Row([
                     ft.Column([
-                        kasa_baslik_metni,
+                        ft.Text("ELDEKİ TOPLAM NAKİT HESAP", size=10.5, weight=ft.FontWeight.BOLD, color="#94a3b8"),
                         kasa_tutar_metni
                     ], spacing=2),
                     ft.Container(
@@ -3521,96 +3444,48 @@ def main(page: ft.Page):
                     )
                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Container(height=4),
-                # 3 Ana Hesap Kutucukları (Nakit Hesap, Banka Hesabı, Birikim Hesabı)
+                # Abdurrahman ve Hatice Nakit Hesap Kutucukları (Toplamı Yukarıdaki Ana Nakit Hesabı Oluşturur)
                 ft.Row([
                     ft.Container(
                         content=ft.Column([
-                            ft.Text("💵 Nakit Hesap", size=9.5, color="#a7f3d0", weight=ft.FontWeight.W_600, text_align=ft.TextAlign.CENTER),
-                            hesap_nakit_txt
-                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
-                        bgcolor="#064e3b",
-                        border=make_border_all(1, "#059669"),
-                        border_radius=10,
-                        padding=make_padding(4, 5),
-                        expand=1,
-                        height=50,
-                        alignment=get_alignment_center()
-                    ),
-                    ft.Container(
-                        content=ft.Column([
-                            ft.Text("💳 Banka Hesabı", size=9.5, color="#bfdbfe", weight=ft.FontWeight.W_600, text_align=ft.TextAlign.CENTER),
-                            hesap_banka_txt
-                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
+                            ft.Row([
+                                ft.Icon(ft.Icons.PERSON_ROUNDED, color="#60a5fa", size=15),
+                                ft.Text("👑 Abdurrahman", size=11, color="#bfdbfe", weight=ft.FontWeight.BOLD)
+                            ], spacing=4, alignment=ft.MainAxisAlignment.CENTER),
+                            hesap_abdurrahman_txt
+                        ], spacing=3, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
                         bgcolor="#1e3a8a",
-                        border=make_border_all(1, "#2563eb"),
-                        border_radius=10,
-                        padding=make_padding(4, 5),
+                        border=make_border_all(1.2, "#2563eb"),
+                        border_radius=12,
+                        padding=make_padding(6, 8),
                         expand=1,
-                        height=50,
+                        height=58,
                         alignment=get_alignment_center()
                     ),
                     ft.Container(
                         content=ft.Column([
-                            ft.Text("🏦 Birikim Hesabı", size=9.5, color="#fde68a", weight=ft.FontWeight.W_600, text_align=ft.TextAlign.CENTER),
-                            hesap_birikim_txt
-                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
-                        bgcolor="#78350f",
-                        border=make_border_all(1, "#d97706"),
-                        border_radius=10,
-                        padding=make_padding(4, 5),
+                            ft.Row([
+                                ft.Icon(ft.Icons.PERSON_ROUNDED, color="#34d399", size=15),
+                                ft.Text("👤 Hatice", size=11, color="#a7f3d0", weight=ft.FontWeight.BOLD)
+                            ], spacing=4, alignment=ft.MainAxisAlignment.CENTER),
+                            hesap_hatice_txt
+                        ], spacing=3, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
+                        bgcolor="#064e3b",
+                        border=make_border_all(1.2, "#059669"),
+                        border_radius=12,
+                        padding=make_padding(6, 8),
                         expand=1,
-                        height=50,
+                        height=58,
                         alignment=get_alignment_center()
                     ),
-                ], spacing=6),
-                # Seçili Dönem Özeti (Bu Ay Gelir, Bu Ay Gider, Aylık Net)
-                ft.Row([
-                    ft.Container(
-                        content=ft.Column([
-                            ft.Text("Bu Ay Gelir", size=9.5, color="#94a3b8", weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
-                            bu_ay_gelir_txt
-                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
-                        bgcolor="#132338",
-                        border_radius=10,
-                        padding=make_padding(4, 4),
-                        expand=1,
-                        height=48,
-                        alignment=get_alignment_center()
-                    ),
-                    ft.Container(
-                        content=ft.Column([
-                            ft.Text("Bu Ay Gider", size=9.5, color="#94a3b8", weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
-                            bu_ay_gider_txt
-                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
-                        bgcolor="#271822",
-                        border_radius=10,
-                        padding=make_padding(4, 4),
-                        expand=1,
-                        height=48,
-                        alignment=get_alignment_center()
-                    ),
-                    ft.Container(
-                        content=ft.Column([
-                            ft.Text("Aylık Net", size=9.5, color="#94a3b8", weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
-                            bu_ay_fark_txt
-                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
-                        bgcolor="#162235",
-                        border_radius=10,
-                        padding=make_padding(4, 4),
-                        expand=1,
-                        height=48,
-                        alignment=get_alignment_center()
-                    ),
-                ], spacing=6),
-                uye_cuzdan_metni
-            ], spacing=5),
+                ], spacing=8)
+            ], spacing=6),
             bgcolor="#0f172a",
             border=make_border_all(1, "#1e293b"),
             border_radius=18,
-            padding=14,
+            padding=16,
             width=355,
         )
-
         bakiye_metni = ft.Text("", visible=False)
         donem_metni = ft.Text(size=13, weight=ft.FontWeight.BOLD, color="#1e293b")
         liste_arayuzu = ft.ListView(height=420, spacing=2)
@@ -3622,6 +3497,7 @@ def main(page: ft.Page):
         def filtre_sec(f_adi):
             dokunma_geribildirimi()
             secilen_filtre[0] = f_adi
+            secilen_goruntuleme_limiti[0] = 60
             filtre_butonlari_guncelle()
             arayuzu_guncelle()
 
@@ -4172,7 +4048,7 @@ def main(page: ft.Page):
                         tur_turu = "Para Aktarımı"
 
                     kayit = {
-                        "kullanici": f"Birikim Hesabı ({kullanici})" if "birikim" in cumle.lower() else (f"Banka Hesabı ({kullanici})" if ("banka" in cumle.lower() or "kart" in cumle.lower()) else f"Nakit Hesap ({kullanici})"),
+                        "kullanici": "Hatice" if "hatice" in cumle.lower() else ("Abdurrahman" if "abdurrahman" in cumle.lower() else kullanici),
                         "tur": tur_turu,
                         "tarih": t_str or datetime.date.today().strftime("%d.%m.%Y"),
                         "saat": s_str or datetime.datetime.now().strftime("%H:%M"),
@@ -4688,7 +4564,7 @@ def main(page: ft.Page):
                         eklenen_toplam = 0.0
                         simdi_ts = int(datetime.datetime.now().timestamp() * 1000)
 
-                        harcayan_hesap = gider_kullanici_etiketi_olustur(fis_hesap_dd.value, kullanici)
+                        harcayan_hesap = "Hatice" if "Hatice" in (fis_hesap_dd.value or "") else "Abdurrahman"
 
                         for itm_idx, itm in enumerate(toplu_onay_verileri):
                             if itm["chk"].value:
@@ -4765,14 +4641,12 @@ def main(page: ft.Page):
                     )
 
                     fis_hesap_dd = make_dropdown(
-                        label="Bu Fiş Hangi Hesaptan Ödendi?",
+                        label="Fişi Ödeyen Kişi (Nakit Hesabından Düşer)",
                         options=[
-                            f"💵 Nakit Hesap ({kullanici})",
-                            "💳 Banka Hesabı",
-                            "🏦 Birikim Hesabı",
-                            f"💵 Nakit Hesap ({'Hatice' if kullanici == 'Abdurrahman' else 'Abdurrahman'})"
+                            f"👑 Abdurrahman",
+                            f"👤 Hatice"
                         ],
-                        value=f"💵 Nakit Hesap ({kullanici})",
+                        value=f"👑 Abdurrahman" if kullanici == "Abdurrahman" else f"👤 Hatice",
                         width=335,
                         dense=True
                     )
@@ -5012,20 +4886,68 @@ def main(page: ft.Page):
                 ], spacing=4)
             )
 
-            # A. UYGULAMA İÇİ DOĞRUDAN CANLI KAMERA VİZÖRÜ (flet-camera / ft.Camera) VE OTOMATİK KAMERA İZLEYİCİ
-            # KESİNLİKLE galeri_picker.pick_files ÇAĞIRMAZ (Galeri seçici açılmaz, doğrudan kamera açılır!)
-            def canli_kamera_vizoru_ac(ev=None):
+            # A. XIAOMI REDMI NOTE 9 PRO & REDMI 14C İÇİN ÖZEL KAMERA BAŞLATICI
+            def redmi_kamera_ac_ve_izle(ev=None):
                 dokunma_geribildirimi()
                 baslangic_zamani = time.time()
                 guncel_ilk = son_gorselleri_bul(limit=1)
                 onceki_en_yeni_yol = guncel_ilk[0]["yol"] if guncel_ilk else None
 
-                # 1. Arka planda DCIM/Camera klasörünü 180 saniye izle (Harici kamera ile çekilirse de anında yakalar)
-                izleyici_aktif = [True]
-                def _yeni_cekilen_fisi_izle():
+                # 1. Xiaomi / Redmi yerel Kamera uygulamasını doğrudan açmayı dene
+                kamera_acildi = False
+                if platform_mobil_mi():
+                    # Yöntem 1: pyjnius ile Android ACTION_IMAGE_CAPTURE / STILL_IMAGE_CAMERA
+                    try:
+                        from jnius import autoclass
+                        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+                        Intent = autoclass('android.content.Intent')
+                        MediaStore = autoclass('android.provider.MediaStore')
+                        act = PythonActivity.mActivity
+                        
+                        # Xiaomi Redmi'de doğrudan çalışan kamera intenti
+                        cam_intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+                        cam_intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        act.startActivity(cam_intent)
+                        kamera_acildi = True
+                    except Exception:
+                        try:
+                            from jnius import autoclass
+                            PythonActivity = autoclass('org.kivy.android.PythonActivity')
+                            Intent = autoclass('android.content.Intent')
+                            act = PythonActivity.mActivity
+                            cam_intent = Intent("android.media.action.STILL_IMAGE_CAMERA")
+                            cam_intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            act.startActivity(cam_intent)
+                            kamera_acildi = True
+                        except Exception:
+                            pass
+
+                    # Yöntem 2: Android kabuk (shell) am start komutuyla Xiaomi kamera paketini tetikle
+                    if not kamera_acildi:
+                        for am_cmd in [
+                            ["am", "start", "-a", "android.media.action.IMAGE_CAPTURE"],
+                            ["am", "start", "-a", "android.media.action.STILL_IMAGE_CAMERA"],
+                            ["am", "start", "-n", "com.android.camera/.Camera"]
+                        ]:
+                            try:
+                                import subprocess
+                                ret = subprocess.call(am_cmd)
+                                if ret == 0:
+                                    kamera_acildi = True
+                                    break
+                            except Exception:
+                                pass
+
+                # 2. Kamera butonuna basıldığı an canlı izleyiciyi başlat (Xiaomi Redmi DCIM/Camera klasörünü 180 sn izler)
+                kamera_durum_kutusu.visible = True
+                try:
+                    kamera_durum_kutusu.update()
+                    page.update()
+                except Exception:
+                    pass
+
+                def _redmi_yeni_fotografi_izle():
                     for _ in range(180):
-                        if not izleyici_aktif[0]:
-                            return
                         time.sleep(1.0)
                         try:
                             guncel = son_gorselleri_bul(limit=1)
@@ -5036,221 +4958,54 @@ def main(page: ft.Page):
                                     mtime = os.path.getmtime(y_yol)
                                 except Exception:
                                     mtime = 0
-                                if y_yol != onceki_en_yeni_yol and mtime >= (baslangic_zamani - 3.0):
-                                    izleyici_aktif[0] = False
+                                if y_yol != onceki_en_yeni_yol and mtime >= (baslangic_zamani - 2.0):
                                     time.sleep(0.8)
-                                    try:
-                                        close_app_dialog(page, kamera_vizor_dialog)
-                                    except Exception:
-                                        pass
-                                    try:
-                                        close_app_dialog(page, fis_dialog)
-                                    except Exception:
-                                        pass
-                                    show_app_snackbar(page, f"📸 Yeni çekilen fiş algılandı ({en_yeni['ad']}), analiz ediliyor...", color="#10b981")
+                                    close_app_dialog(page, fis_dialog)
+                                    show_app_snackbar(page, f"📸 Redmi kamerasıyla çekilen fiş algılandı ({en_yeni['ad']}), analiz ediliyor...", color="#10b981")
                                     fis_gorselini_tara_ve_goster(y_yol)
                                     return
                         except Exception:
                             pass
 
-                threading.Thread(target=_yeni_cekilen_fisi_izle, daemon=True).start()
+                threading.Thread(target=_redmi_yeni_fotografi_izle, daemon=True).start()
 
-                # 2. Flet Yerel Kamera Kontrolünü (flet_camera.Camera veya ft.Camera) kontrol et
-                cam_mod = fc if fc is not None else (ft if hasattr(ft, "Camera") else None)
-                cam_ctrl = None
-                if cam_mod is not None and hasattr(cam_mod, "Camera"):
+                # Masaüstünde ise dosya seçici aç
+                if not platform_mobil_mi():
                     try:
-                        cam_ctrl = cam_mod.Camera(
-                            expand=True,
-                            preview_enabled=True,
-                            content=ft.Container(
-                                alignment=get_alignment_center(),
-                                content=ft.Icon(ft.Icons.CENTER_FOCUS_STRONG, color="white54", size=42)
-                            )
+                        import tkinter as tk
+                        from tkinter import filedialog
+                        root = tk.Tk()
+                        root.withdraw()
+                        root.attributes("-topmost", True)
+                        dy_list = filedialog.askopenfilenames(
+                            title="Fiş Fotoğrafı Seçin",
+                            filetypes=[("Resim ve PDF Dosyaları", "*.jpg *.jpeg *.png *.webp *.bmp *.heic *.pdf"), ("Tüm Dosyalar", "*.*")]
                         )
-                    except Exception as ex_cam_init:
-                        print("Camera control oluşturma uyarısı:", ex_cam_init)
-                        cam_ctrl = None
-
-                # Eğer uygulama içi canlı kamera kontrolü mevcutsa (APK içinde flet-camera yüklüyse):
-                if cam_ctrl is not None:
-                    close_app_dialog(page, fis_dialog)
-                    vizor_durum_txt = ft.Text("📷 Kamera başlatılıyor...", size=11, color="#047857", weight=ft.FontWeight.W_600)
-                    kameralar_listesi = []
-                    aktif_kamera_idx = [0]
-                    kamera_hazir = [False]
-
-                    async def _kamerayi_baslat_async():
-                        try:
-                            # Önce çalışma zamanı kamera iznini iste (varsa)
-                            if fph is not None and hasattr(fph, "PermissionHandler"):
-                                try:
-                                    ph = fph.PermissionHandler()
-                                    if hasattr(page, "services"):
-                                        page.services.append(ph)
-                                    await ph.request(fph.Permission.CAMERA)
-                                except Exception:
-                                    pass
-
-                            cams = await cam_ctrl.get_available_cameras()
-                            if not cams:
-                                vizor_durum_txt.value = "⚠️ Kamera donanımı bulunamadı veya izin verilmedi. Telefonunuzun kendi kamerasıyla çekebilirsiniz (otomatik algılanır)."
-                                page.update()
+                        root.destroy()
+                        if dy_list:
+                            gecerli_yollar = [y for y in dy_list if os.path.exists(y)]
+                            if gecerli_yollar:
+                                close_app_dialog(page, fis_dialog)
+                                fis_gorselini_tara_ve_goster(gecerli_yollar)
                                 return
-
-                            kameralar_listesi.clear()
-                            kameralar_listesi.extend(cams)
-
-                            # Arka kamerayı (BACK) öncelikli seç
-                            secilen_cam = cams[0]
-                            for idx_c, c_desc in enumerate(cams):
-                                l_dir = str(getattr(c_desc, "lens_direction", "")).lower()
-                                c_name = str(getattr(c_desc, "name", "")).lower()
-                                if "back" in l_dir or "0" in c_name or "rear" in c_name:
-                                    secilen_cam = c_desc
-                                    aktif_kamera_idx[0] = idx_c
-                                    break
-
-                            res_preset = getattr(cam_mod.ResolutionPreset, "HIGH", getattr(cam_mod.ResolutionPreset, "MEDIUM", None)) if hasattr(cam_mod, "ResolutionPreset") else None
-                            img_fmt = getattr(cam_mod.ImageFormatGroup, "JPEG", None) if hasattr(cam_mod, "ImageFormatGroup") else None
-
-                            init_kwargs = {"description": secilen_cam, "enable_audio": False}
-                            if res_preset is not None:
-                                init_kwargs["resolution_preset"] = res_preset
-                            if img_fmt is not None:
-                                init_kwargs["image_format_group"] = img_fmt
-
-                            await cam_ctrl.initialize(**init_kwargs)
-                            kamera_hazir[0] = True
-                            vizor_durum_txt.value = "✅ Kamera Hazır! Fişi çerçeveye ortalayıp 'Fotoğraf Çek' butonuna basın."
-                            page.update()
-                        except Exception as ex_init:
-                            vizor_durum_txt.value = f"ℹ️ Canlı vizör başlatılamadı ({ex_init}). Telefon kamerasıyla çekerseniz otomatik algılanır."
-                            page.update()
-
-                    async def _fotograf_cek_async(ev_btn=None):
-                        dokunma_geribildirimi()
-                        if not kamera_hazir[0]:
-                            show_app_snackbar(page, "⏳ Kamera henüz hazırlanıyor, lütfen 1 saniye bekleyin...", color="#f59e0b")
-                            return
-                        try:
-                            vizor_durum_txt.value = "📸 Fotoğraf çekiliyor ve kaydediliyor..."
-                            page.update()
-                            img_bytes = await cam_ctrl.take_picture()
-                            if img_bytes:
-                                izleyici_aktif[0] = False
-                                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                                    tf.write(img_bytes)
-                                    cekilen_yol = tf.name
-                                close_app_dialog(page, kamera_vizor_dialog)
-                                show_app_snackbar(page, "✅ Fiş fotoğrafı çekildi! Yapay zeka ile okunuyor...", color="#10b981")
-                                fis_gorselini_tara_ve_goster(cekilen_yol)
-                        except Exception as ex_take:
-                            show_app_snackbar(page, f"Fotoğraf çekme hatası: {ex_take}", color="#ef4444")
-
-                    async def _kamera_degistir_async(ev_sw=None):
-                        dokunma_geribildirimi()
-                        if len(kameralar_listesi) < 2:
-                            return
-                        aktif_kamera_idx[0] = (aktif_kamera_idx[0] + 1) % len(kameralar_listesi)
-                        yeni_cam = kameralar_listesi[aktif_kamera_idx[0]]
-                        try:
-                            await cam_ctrl.set_description(yeni_cam)
-                            page.update()
-                        except Exception:
-                            pass
-
-                    def _vizor_kapat(ev_k=None):
-                        izleyici_aktif[0] = False
-                        close_app_dialog(page, kamera_vizor_dialog)
-
-                    kamera_vizor_dialog = ft.AlertDialog(
-                        title=ft.Row([
-                            ft.Icon(ft.Icons.PHOTO_CAMERA_ROUNDED, color="#10b981", size=22),
-                            ft.Text("📷 Fiş Fotoğrafı Çek", size=15, weight=ft.FontWeight.BOLD, expand=True),
-                            ft.IconButton(
-                                icon=getattr(ft.Icons, "CAMERASWITCH_ROUNDED", getattr(ft.Icons, "FLIP_CAMERA_ANDROID", ft.Icons.CAMERA_ALT)),
-                                icon_color="#2563eb",
-                                tooltip="Ön / Arka Kamera Değiştir",
-                                on_click=lambda _: page.run_task(_kamera_degistir_async) if hasattr(page, "run_task") else None
-                            )
-                        ], spacing=6),
-                        content=ft.Container(
-                            width=340,
-                            height=430,
-                            content=ft.Column([
-                                ft.Container(
-                                    content=cam_ctrl,
-                                    width=335,
-                                    height=320,
-                                    bgcolor="black",
-                                    border_radius=12,
-                                    clip_behavior=ft.ClipBehavior.HARD_EDGE if hasattr(ft, "ClipBehavior") else None
-                                ),
-                                vizor_durum_txt,
-                                make_button(
-                                    "📸 FİŞİ ÇEK VE TARA",
-                                    icon=ft.Icons.CAMERA_ROUNDED,
-                                    bgcolor="#10b981",
-                                    color="white",
-                                    height=46,
-                                    width=335,
-                                    on_click=lambda _: page.run_task(_fotograf_cek_async) if hasattr(page, "run_task") else threading.Thread(target=lambda: asyncio.run(_fotograf_cek_async()), daemon=True).start()
-                                )
-                            ], spacing=8, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-                        ),
-                        actions=[
-                            make_button("✕ İptal", height=32, outlined=True, on_click=_vizor_kapat)
-                        ],
-                        actions_alignment=ft.MainAxisAlignment.END
-                    )
-                    show_app_dialog(page, kamera_vizor_dialog)
-                    if hasattr(page, "run_task"):
-                        page.run_task(_kamerayi_baslat_async)
-                    else:
-                        threading.Thread(target=lambda: asyncio.run(_kamerayi_baslat_async()), daemon=True).start()
-                    return
-
-                # 3. Eğer cihazda veya bilgisayarda flet_camera paketi henüz kurulmamışsa:
-                # Android'de yerel kamera intentini dene ve otomatik kamera izleyicisini aktif et (ASLA galeri_picker AÇMA!)
-                kamera_durum_kutusu.visible = True
-                try:
-                    kamera_durum_kutusu.update()
-                    page.update()
-                except Exception:
-                    pass
-
-                if platform_mobil_mi():
-                    try:
-                        from jnius import autoclass
-                        PythonActivity = autoclass('org.kivy.android.PythonActivity')
-                        Intent = autoclass('android.content.Intent')
-                        act = PythonActivity.mActivity
-                        cam_intent = Intent('android.media.action.STILL_IMAGE_CAMERA')
-                        cam_intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        act.startActivity(cam_intent)
                     except Exception:
-                        try:
-                            import subprocess
-                            subprocess.Popen(['am', 'start', '-a', 'android.media.action.STILL_IMAGE_CAMERA'])
-                        except Exception:
-                            pass
+                        pass
 
                 show_app_snackbar(
                     page,
-                    "📸 Kamera izleyici başlatıldı! Telefonunuzun kamerasıyla fişi çektiğiniz an otomatik taranacaktır.",
+                    "📷 Xiaomi Redmi Kamera Aktif! Kamerayla fişi çekip uygulamaya döndüğünüzde fiş otomatik taranacaktır.",
                     color="#10b981"
                 )
 
             dialog_icerik = [
                 kamera_durum_kutusu,
                 make_button(
-                    "📷 Kamerayı Aç & Fiş Çek",
+                    "📷 Kamerayı Aç & Fiş Çek (Xiaomi Redmi Uyumlu)",
                     icon=ft.Icons.PHOTO_CAMERA_ROUNDED,
                     bgcolor="#10b981",
                     color="white",
                     height=44,
-                    on_click=canli_kamera_vizoru_ac
+                    on_click=redmi_kamera_ac_ve_izle
                 ),
                 make_button(
                     "📁 Galeriden Fiş Seç (Tekli veya Çoklu Seçim)",
@@ -5747,6 +5502,7 @@ def main(page: ft.Page):
 
         def tum_zamanlar_toggle(e):
             tum_zamanlar_modu[0] = not tum_zamanlar_modu[0]
+            secilen_goruntuleme_limiti[0] = 60
             arayuzu_guncelle()
 
         # --- ÖZEL TARİH ARALIĞI SEÇİM MODALI (ÖRN: 3 EKİM - 20 EKİM) ---
@@ -6025,21 +5781,10 @@ def main(page: ft.Page):
                 else:
                     mevcut_h_deger = f"Nakit Hesap ({h_kisi})"
 
-                hesap_opsiyonlari = [
-                    "Nakit Hesap (Abdurrahman)",
-                    "Nakit Hesap (Hatice)",
-                    "Banka Hesabı (Abdurrahman)",
-                    "Banka Hesabı (Hatice)",
-                    "Birikim Hesabı (Abdurrahman)",
-                    "Birikim Hesabı (Hatice)"
-                ]
-                if mevcut_h_deger not in hesap_opsiyonlari:
-                    hesap_opsiyonlari.insert(0, mevcut_h_deger)
-
                 duzenle_hesap = make_dropdown(
-                    options=hesap_opsiyonlari,
-                    value=mevcut_h_deger,
-                    label="Ödeme Hesabı (Nakit / Banka / Birikim)",
+                    options=["Abdurrahman", "Hatice"],
+                    value="Hatice" if "hatice" in str(item.get("kullanici", "")).lower() else "Abdurrahman",
+                    label="İşlemi Yapan Kişi (Nakit Hesap)",
                     width=310,
                     dense=True
                 )
@@ -6209,7 +5954,7 @@ def main(page: ft.Page):
                     yeni_firma_val = duzenle_firma.value.strip()
                     eski_kat_val = (item.get("kategori") or "").strip()
                     yeni_kat_val = (duzenle_kat.value or "Diğer").strip()
-                    item["kullanici"] = duzenle_hesap.value
+                    item["kullanici"] = "Hatice" if "Hatice" in (duzenle_hesap.value or "") else "Abdurrahman"
                     item["firma"] = yeni_firma_val
                     yeni_urun_val = duzenle_urun.value.strip()
                     item["urun"] = yeni_urun_val
@@ -6287,107 +6032,46 @@ def main(page: ft.Page):
             liste_arayuzu.controls.clear()
             liste_arayuzu.controls.append(ft.Container(key="liste_basi", height=0))
 
-            # 1. TÜM ZAMANLAR 3 HESAP BAKİYE SİSTEMİ (Nakit Hesap, Banka Hesabı, Birikim Hesabı)
-            # Kural: Alışverişler varsayılan olarak Nakit Hesaptan yapılır ve işlemi kim yapıyorsa (Abdurrahman / Hatice) onun hesabından düşer.
-            # Önceki aylarda biriken nakit birikimlerle altın/döviz gibi yatırım yapıldığında Birikim Hesabından düşülür.
-            genel_gelir = 0.0
-            kasa_harcamalari = 0.0
-            genel_kullanici_harcamalari = {}
-            genel_kullaniciya_aktarilan = {}
-
+            # 1. TÜM ZAMANLAR KÜMÜLATİF NAKİT HESAP SİSTEMİ
+            # Abdurrahman ve Hatice'nin hesapları toplamı Nakit Hesabı oluşturur!
+            # Alışverişler işlemi kim yapıyorsa onun hesabından düşer.
+            # Eşler arası aktarımda gönderenden düşer, alana eklenir; toplam nakit değişmez.
             nakit_giris_abdurrahman = 0.0
             nakit_cikis_abdurrahman = 0.0
             nakit_giris_hatice = 0.0
             nakit_cikis_hatice = 0.0
-
-            banka_giris = 0.0
-            banka_cikis = 0.0
-
-            birikim_giris = 0.0
-            birikim_cikis = 0.0
 
             for item in islemler:
                 t = float(item.get("tutar") or 0.0)
                 tur = item.get("tur")
                 h_bilgi = islem_hesap_bilgisi_coz(item, varsayilan_kullanici="Abdurrahman")
                 kisi = h_bilgi.get("kisi", "Abdurrahman")
-                hesap_turu = h_bilgi.get("hesap", "Nakit Hesap")
-                alt_tur = h_bilgi.get("alt_tur", "Harcama")
 
                 if tur == "Gelir":
-                    genel_gelir += t
-                    if hesap_turu == "Birikim Hesabı":
-                        birikim_giris += t
-                    elif hesap_turu == "Banka Hesabı":
-                        banka_giris += t
+                    if kisi == "Hatice":
+                        nakit_giris_hatice += t
                     else:
-                        if kisi == "Hatice":
-                            nakit_giris_hatice += t
-                        else:
-                            nakit_giris_abdurrahman += t
+                        nakit_giris_abdurrahman += t
 
                 elif tur == "Para Aktarımı":
-                    k_det = tr_lower(h_bilgi.get("kaynak_detay", ""))
-                    h_det = tr_lower(h_bilgi.get("hedef_detay", ""))
+                    gonderen = h_bilgi.get("gonderen", kisi)
+                    alici = h_bilgi.get("alici", "Hatice")
+                    if gonderen == "Hatice":
+                        nakit_cikis_hatice += t
+                        nakit_giris_abdurrahman += t
+                    else:
+                        nakit_cikis_abdurrahman += t
+                        nakit_giris_hatice += t
 
-                    # Kaynaktan düş
-                    if "birikim" in k_det:
-                        birikim_cikis += t
-                    elif "banka" in k_det:
-                        banka_cikis += t
-                    elif "hatice" in k_det:
+                elif tur == "Gider":
+                    if kisi == "Hatice":
                         nakit_cikis_hatice += t
                     else:
                         nakit_cikis_abdurrahman += t
 
-                    # Hedefe ekle
-                    if "birikim" in h_det:
-                        birikim_giris += t
-                    elif "banka" in h_det:
-                        banka_giris += t
-                    elif "hatice" in h_det or "aile" in h_det:
-                        nakit_giris_hatice += t
-                        genel_kullaniciya_aktarilan["Hatice"] = genel_kullaniciya_aktarilan.get("Hatice", 0.0) + t
-                    elif "abdurrahman" in h_det:
-                        nakit_giris_abdurrahman += t
-                    else:
-                        genel_kullaniciya_aktarilan[h_det.capitalize()] = genel_kullaniciya_aktarilan.get(h_det.capitalize(), 0.0) + t
-
-                elif tur == "Gider":
-                    if alt_tur == "Birikime Aktarım":
-                        # Nakit veya Bankadan Birikim Hesabına aktarılan tutar
-                        if hesap_turu == "Banka Hesabı":
-                            banka_cikis += t
-                        else:
-                            if kisi == "Hatice":
-                                nakit_cikis_hatice += t
-                            else:
-                                nakit_cikis_abdurrahman += t
-                        birikim_giris += t
-                    elif hesap_turu == "Birikim Hesabı":
-                        # Altın, Döviz vb. Birikim Hesabından yapılan yatırım/harcama
-                        birikim_cikis += t
-                    elif hesap_turu == "Banka Hesabı":
-                        banka_cikis += t
-                        kasa_harcamalari += t
-                    else:
-                        # Nakit Hesap harcaması: İşlemi kim yapıyorsa onun nakit hesabından düşer
-                        if kisi == "Hatice":
-                            nakit_cikis_hatice += t
-                            genel_kullanici_harcamalari["Hatice"] = genel_kullanici_harcamalari.get("Hatice", 0.0) + t
-                        else:
-                            nakit_cikis_abdurrahman += t
-                            kasa_harcamalari += t
-
             net_nakit_abdurrahman = nakit_giris_abdurrahman - nakit_cikis_abdurrahman
             net_nakit_hatice = nakit_giris_hatice - nakit_cikis_hatice
             toplam_nakit_hesap = net_nakit_abdurrahman + net_nakit_hatice
-            net_banka_hesabi = banka_giris - banka_cikis
-            net_birikim_hesabi = birikim_giris - birikim_cikis
-
-            # Eldeki Kullanılabilir Ana Bakiye (Nakit + Banka) ve Genel Toplam Varlık
-            kullanilabilir_ana_kasa = toplam_nakit_hesap + net_banka_hesabi
-            genel_kasa = kullanilabilir_ana_kasa
 
             # 2. SEÇİLİ DÖNEM HESAPLAMASI (O Ayın Gelir ve Gideri)
             donem_gelir = 0.0
@@ -6438,11 +6122,12 @@ def main(page: ft.Page):
                         alici = "Hatice"
                     donem_kullaniciya_aktarilan[alici] = donem_kullaniciya_aktarilan.get(alici, 0.0) + tutar
                 elif islem_turu_val == "Gider":
+                    h_detay_it = islem_hesap_bilgisi_coz(item, varsayilan_kullanici="Abdurrahman")
+                    toplam_donem_gider_sayisi += 1
                     donem_gider += tutar
                     donem_toplam_harcama += tutar
-                    toplam_donem_gider_sayisi += 1
-                    if islem_sahibi not in ["Abdurrahman", "Ev Yöneticisi"]:
-                        donem_kullanici_harcamalari[islem_sahibi] = donem_kullanici_harcamalari.get(islem_sahibi, 0.0) + tutar
+                    if h_detay_it.get("kisi") == "Hatice":
+                        donem_kullanici_harcamalari["Hatice"] = donem_kullanici_harcamalari.get("Hatice", 0.0) + tutar
                     else:
                         donem_kasa_harcamasi += tutar
 
@@ -6581,7 +6266,14 @@ def main(page: ft.Page):
                     )
 
             gosterilen_sayisi = 0
-            for item in donem_islemleri:
+            # Hızlı Açılış ve Dinamik Yükleme: Kullanıcı tıkladıkça kalan kayıtları ekrana basar
+            aktif_limit = secilen_goruntuleme_limiti[0]
+            if arama_metni or len(donem_islemleri) <= aktif_limit:
+                limitli_liste = donem_islemleri
+            else:
+                limitli_liste = donem_islemleri[:aktif_limit]
+
+            for item in limitli_liste:
                 gosterilen_sayisi += 1
                 tutar = float(item.get("tutar") or 0.0)
                 islem_sahibi = item.get("kullanici") or "Bilinmeyen"
@@ -6603,17 +6295,18 @@ def main(page: ft.Page):
                     ikon_renk = "#047857"
 
                 elif islem_turu_val == "Para Aktarımı":
-                    alici = item.get("kaynak") or "Aile Üyesi"
-                    if not (yonetici_mi or kullanici == alici):
-                        continue
-                    baslik = f"Aktarım: {alici}"
-                    ack = item.get("aciklama") or "Nakit Aktarımı"
-                    alt_detay = f"{zaman_metni} • {ack}"
+                    h_det_akt = islem_hesap_bilgisi_coz(item, varsayilan_kullanici="Abdurrahman")
+                    gonderen = h_det_akt.get("gonderen", "Abdurrahman")
+                    alici = h_det_akt.get("alici", "Hatice")
+                    ack = item.get("aciklama") or "Eşler Arası Aktarım"
+
+                    baslik = f"💸 Aktarım: {gonderen} ➔ {alici}"
                     tutar_metni = f"↕ {tutar:,.2f} TL"
                     tutar_rengi = "#2563eb"
                     ikon_adi = ft.Icons.SWAP_HORIZ
                     ikon_bg = "#dbeafe"
                     ikon_renk = "#1d4ed8"
+                    alt_detay = f"{zaman_metni} • {ack}"
 
                 else:
                     # Gider
@@ -6653,29 +6346,14 @@ def main(page: ft.Page):
                     on_click=lambda e, it=item: silme_onayi_iste(it)
                 )
 
-                # Kimin işlem yaptığı ve hangi hesaptan (Nakit / Banka / Birikim) yapıldığı rozeti
+                # Kimin işlem yaptığı rozeti (Abdurrahman / Hatice)
                 h_cozum = islem_hesap_bilgisi_coz(item, varsayilan_kullanici="Abdurrahman")
                 h_kisi = h_cozum.get("kisi", "Abdurrahman")
-                h_hesap = h_cozum.get("hesap", "Nakit Hesap")
-                h_alt = h_cozum.get("alt_tur", "Harcama")
-
                 kisi_ikon = "👑" if h_kisi == "Abdurrahman" else "👤"
-                if h_alt == "Birikime Aktarım":
-                    sahip_badge_metni = f"🏦 Birikime Aktarım ({kisi_ikon} {h_kisi})"
-                    sahip_badge_bg = "#fef3c7"
-                    sahip_badge_color = "#b45309"
-                elif h_hesap == "Birikim Hesabı":
-                    sahip_badge_metni = f"🏦 Birikim Hesabı ({kisi_ikon} {h_kisi})"
-                    sahip_badge_bg = "#fef3c7"
-                    sahip_badge_color = "#b45309"
-                elif h_hesap == "Banka Hesabı":
-                    sahip_badge_metni = f"💳 Banka Hesabı ({kisi_ikon} {h_kisi})"
-                    sahip_badge_bg = "#dbeafe"
-                    sahip_badge_color = "#1d4ed8"
-                else:
-                    sahip_badge_metni = f"💵 Nakit ({kisi_ikon} {h_kisi})"
-                    sahip_badge_bg = "#eff6ff" if h_kisi == "Abdurrahman" else "#f0fdf4"
-                    sahip_badge_color = "#2563eb" if h_kisi == "Abdurrahman" else "#16a34a"
+
+                sahip_badge_metni = f"{kisi_ikon} {h_kisi}"
+                sahip_badge_bg = "#eff6ff" if h_kisi == "Abdurrahman" else "#f0fdf4"
+                sahip_badge_color = "#2563eb" if h_kisi == "Abdurrahman" else "#16a34a"
 
                 miktar_val_str = str(item.get("miktar") or "").strip()
                 raw_bf = item.get("birim_fiyat")
@@ -6802,6 +6480,32 @@ def main(page: ft.Page):
                 )
                 liste_arayuzu.controls.append(satir)
 
+            kalan_sayisi = len(donem_islemleri) - len(limitli_liste)
+            if not arama_metni and kalan_sayisi > 0:
+                def _tum_islemleri_goster(ev):
+                    dokunma_geribildirimi()
+                    secilen_goruntuleme_limiti[0] = len(donem_islemleri)
+                    arayuzu_guncelle()
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
+
+                liste_arayuzu.controls.append(
+                    ft.Container(
+                        content=make_button(
+                            f"📜 Dönemdeki Kalan {kalan_sayisi} Kaydı Yükle (Tümünü Göster)",
+                            icon=ft.Icons.DOWNLOAD_ROUNDED,
+                            bgcolor="#2563eb",
+                            color="white",
+                            height=38,
+                            width=335,
+                            on_click=_tum_islemleri_goster
+                        ),
+                        alignment=get_alignment_center(),
+                        padding=make_padding(6, 8)
+                    )
+                )
             liste_arayuzu.controls.append(ft.Container(key="liste_sonu", height=0))
             if gosterilen_sayisi == 0:
                 liste_arayuzu.controls.append(
@@ -6815,44 +6519,12 @@ def main(page: ft.Page):
                     )
                 )
 
-            # Bakiye Özeti ve 3 Hesap Modern Kart Güncellemesi
-            hesap_nakit_txt.value = f"{toplam_nakit_hesap:,.2f} TL"
-            hesap_banka_txt.value = f"{net_banka_hesabi:,.2f} TL"
-            hesap_birikim_txt.value = f"{net_birikim_hesabi:,.2f} TL"
+            # Bakiye Özeti Güncellemesi (Tek Nakit Hesap = Abdurrahman + Hatice)
+            kasa_tutar_metni.value = f"{toplam_nakit_hesap:,.2f} TL"
+            kasa_tutar_metni.color = "white"
 
-            if yonetici_mi:
-                kasa_baslik_metni.value = "TOPLAM KULLANILABİLİR (NAKİT + BANKA)"
-                kasa_tutar_metni.value = f"{kullanilabilir_ana_kasa:,.2f} TL"
-                kasa_tutar_metni.color = "white"
-
-                donem_fark = donem_gelir - donem_gider
-                bu_ay_gelir_txt.value = f"+{donem_gelir:,.2f} TL"
-                bu_ay_gider_txt.value = f"-{donem_gider:,.2f} TL"
-                bu_ay_fark_txt.value = f"{donem_fark:+,.2f} TL"
-                bu_ay_fark_txt.color = "#10b981" if donem_fark >= 0 else "#f87171"
-
-                uye_cuzdan_metni.value = (
-                    f"💵 Nakit Detayı ➔ 👑 Abdurrahman: {net_nakit_abdurrahman:,.2f} TL | "
-                    f"👤 Hatice: {net_nakit_hatice:,.2f} TL • 🏦 Birikim: {net_birikim_hesabi:,.2f} TL"
-                )
-                uye_cuzdan_metni.visible = True
-            else:
-                kasa_baslik_metni.value = f"👤 HATİCE NAKİT HESABI (KALAN)"
-                kasa_tutar_metni.value = f"{net_nakit_hatice:,.2f} TL"
-                kasa_tutar_metni.color = "white"
-
-                bu_donem_harcanan = donem_kullanici_harcamalari.get("Hatice", 0.0)
-                bu_donem_aktarilan = donem_kullaniciya_aktarilan.get("Hatice", 0.0)
-
-                bu_ay_gelir_txt.value = f"+{bu_donem_aktarilan:,.2f} TL"
-                bu_ay_gider_txt.value = f"-{bu_donem_harcanan:,.2f} TL"
-                bu_ay_fark_txt.value = f"{net_nakit_hatice:+,.2f} TL"
-
-                uye_cuzdan_metni.value = (
-                    f"👑 Abdurrahman Nakit: {net_nakit_abdurrahman:,.2f} TL | "
-                    f"💳 Banka: {net_banka_hesabi:,.2f} TL | 🏦 Birikim: {net_birikim_hesabi:,.2f} TL"
-                )
-                uye_cuzdan_metni.visible = True
+            hesap_abdurrahman_txt.value = f"{net_nakit_abdurrahman:,.2f} TL"
+            hesap_hatice_txt.value = f"{net_nakit_hatice:,.2f} TL"
 
             # Kategori Özet Rozetini Güncelle
             if secilen_kategori[0] != "Tüm Kategoriler":
@@ -6925,17 +6597,10 @@ def main(page: ft.Page):
                     page.update()
                     return
 
-                sec_g_hesap = gelir_hedef_hesap.value or f"💵 Nakit Hesap ({kullanici})"
-                if "Birikim" in sec_g_hesap:
-                    gelir_kull_etiket = f"Birikim Hesabı ({kullanici})"
-                elif "Banka" in sec_g_hesap:
-                    gelir_kull_etiket = f"Banka Hesabı ({kullanici})"
-                else:
-                    gelir_kull_etiket = f"Nakit Hesap ({kullanici})"
-
+                sec_kisi = "Hatice" if "Hatice" in (gelir_hedef_hesap.value or "") else "Abdurrahman"
                 suanki_ts = int(time.time())
                 yeni_kayit = {
-                    "kullanici": gelir_kull_etiket,
+                    "kullanici": sec_kisi,
                     "tur": "Gelir",
                     "tarih": secilen_gelir_tarih[0].strftime("%d.%m.%Y"),
                     "saat": secilen_gelir_saat[0],
@@ -6982,36 +6647,18 @@ def main(page: ft.Page):
                     page.update()
                     return
 
-                kaynak_sec = aktarim_kaynak_hesap.value or f"💵 Nakit Hesap ({kullanici})"
-                hedef_sec = aktarim_alici.value or "🏦 Birikim Hesabı"
-
-                if "Birikim" in kaynak_sec:
-                    kaynak_temiz = f"Birikim Hesabı ({kullanici})"
-                elif "Banka" in kaynak_sec:
-                    kaynak_temiz = f"Banka Hesabı ({kullanici})"
-                else:
-                    kaynak_temiz = f"Nakit Hesap ({kullanici})"
-
-                if "Birikim" in hedef_sec:
-                    hedef_temiz = "Birikim Hesabı"
-                elif "Hatice" in hedef_sec:
-                    hedef_temiz = "Nakit Hesap (Hatice)"
-                elif "Abdurrahman" in hedef_sec:
-                    hedef_temiz = "Nakit Hesap (Abdurrahman)"
-                elif "Banka" in hedef_sec:
-                    hedef_temiz = "Banka Hesabı"
-                else:
-                    hedef_temiz = hedef_sec
+                gonderen_kisi = "Hatice" if "Hatice" in (aktarim_gonderen.value or "") else "Abdurrahman"
+                alan_kisi = "Hatice" if "Hatice" in (aktarim_alici.value or "") else "Abdurrahman"
 
                 suanki_ts = int(time.time())
                 yeni_kayit = {
-                    "kullanici": kaynak_temiz,
+                    "kullanici": gonderen_kisi,
                     "tur": "Para Aktarımı",
                     "tarih": secilen_aktarim_tarih[0].strftime("%d.%m.%Y"),
                     "saat": datetime.datetime.now().strftime("%H:%M"),
-                    "kaynak": f"{kaynak_temiz} ➔ {hedef_temiz}",
-                    "gelir_turu": "Birikim / Hesap Aktarımı" if "Birikim" in hedef_temiz else "Harçlık / Aktarım",
-                    "aciklama": aktarim_aciklamasi.value.strip() or f"{kaynak_temiz} ➔ {hedef_temiz}",
+                    "kaynak": alan_kisi,
+                    "gelir_turu": "Eşler Arası Aktarım",
+                    "aciklama": aktarim_aciklamasi.value.strip() or f"{gonderen_kisi} ➔ {alan_kisi} Nakit Transferi",
                     "firma": "",
                     "urun": "",
                     "kategori": "Para Aktarımı",
@@ -7024,12 +6671,15 @@ def main(page: ft.Page):
                 if supabase:
                     try:
                         res = supabase.table("islemler").insert(yeni_kayit).execute()
-                        if res.data:
+                        if res and res.data and len(res.data) > 0 and res.data[0].get("id"):
                             yeni_kayit["id"] = res.data[0]["id"]
                     except Exception as ex:
-                        print("Bulut kayıt hatası:", ex)
+                        print("Bulut aktarım kayıt hatası:", ex)
 
                 islemler.insert(0, yeni_kayit)
+                # Anında yerel önbelleğe yaz (Uygulama kapansa dahi asla kaybolmaz!)
+                islemler_yerel_cache_kaydet(islemler)
+
                 bildirim_olustur_ve_gonder(yeni_kayit, gonderen=kullanici)
                 aktarim_tutari.value = ""
                 aktarim_aciklamasi.value = ""
@@ -7074,7 +6724,7 @@ def main(page: ft.Page):
 
                 miktar_tam_metin = f"{miktar_str} {birim_val}".strip() if miktar_str else ""
 
-                secilen_hesap = gider_kullanici_etiketi_olustur(gider_hesap_secimi.value, kullanici)
+                secilen_hesap = "Hatice" if "Hatice" in (gider_hesap_secimi.value or "") else "Abdurrahman"
 
                 suanki_ts = int(time.time())
                 gider_kat_adi = "Poşet" if any(w in urun_val.lower() for w in ["poşet", "poset"]) else gider_kategori.value
@@ -7217,7 +6867,11 @@ def main(page: ft.Page):
                     res = supabase.table("islemler").select("*").order("id", desc=True).limit(2000).execute()
                     if res and res.data is not None:
                         onceki_adet = len(islemler)
+                        bulut_idler = set(str(x.get("id")) for x in res.data if x.get("id"))
+                        yerel_yeni = [x for x in islemler if not x.get("id") or str(x.get("id")) not in bulut_idler]
+
                         islemler.clear()
+                        islemler.extend(yerel_yeni)
                         islemler.extend(res.data)
                         islemler_yerel_cache_kaydet(islemler)
                     # Market isimlerini ve %100 aynı ürün kategorilerini otomatik normalize et
@@ -7642,6 +7296,8 @@ def main(page: ft.Page):
 
                 toplam_gelir = 0.0
                 toplam_gider = 0.0
+                toplam_nakit_gider = 0.0
+                toplam_birikim_gider = 0.0
                 kat_harcamalari = {}
                 market_harcamalari = {}
                 market_islem_adetleri = {}
@@ -7654,11 +7310,17 @@ def main(page: ft.Page):
 
                     tutar = float(item.get("tutar") or 0.0)
                     tur = item.get("tur")
+                    h_coz = islem_hesap_bilgisi_coz(item, varsayilan_kullanici="Abdurrahman")
 
                     if tur == "Gelir":
                         toplam_gelir += tutar
                     elif tur == "Gider":
                         toplam_gider += tutar
+                        if h_coz.get("alt_tur") == "Birikimden Harcama" or h_coz.get("hesap") == "Birikim Hesabı":
+                            toplam_birikim_gider += tutar
+                        else:
+                            toplam_nakit_gider += tutar
+
                         kat = (item.get("kategori") or "Diğer").strip()
                         if not kat:
                             kat = "Diğer"
@@ -7670,7 +7332,8 @@ def main(page: ft.Page):
                         market_harcamalari[mkt] = market_harcamalari.get(mkt, 0.0) + tutar
                         market_islem_adetleri[mkt] = market_islem_adetleri.get(mkt, 0) + 1
 
-                net_fark = toplam_gelir - toplam_gider
+                # Cari Nakit Bütçe Net Farkı (Birikimden altın alımı cari neti eksiye düşürmez)
+                net_fark = toplam_gelir - toplam_nakit_gider
                 bas_str = secilen_donem_bas[0].strftime("%d.%m.%Y")
                 bit_str = secilen_donem_bit[0].strftime("%d.%m.%Y")
                 donem_etiketi = "Tüm Zamanlar" if stat_tum_zamanlar[0] else f"{bas_str} - {bit_str}"
@@ -7702,11 +7365,12 @@ def main(page: ft.Page):
                 )
                 stat_icerik_alani.controls.append(donem_bar)
 
-                # 2. Özet Mini Kartlar (Gelir, Gider, Net)
+                # 2. Özet Mini Kartlar (Gelir, Gider, Net Fark)
+                net_fark = toplam_gelir - toplam_gider
                 ozet_satiri = ft.Row([
                     ft.Container(
                         content=ft.Column([
-                            ft.Text("Gelir", size=10, color="#166534"),
+                            ft.Text("Dönem Geliri", size=10, color="#166534", weight=ft.FontWeight.W_500),
                             ft.Text(f"+{toplam_gelir:,.0f} TL", size=12, weight=ft.FontWeight.BOLD, color="#15803d")
                         ], spacing=1, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                         bgcolor="#dcfce7",
@@ -7716,7 +7380,7 @@ def main(page: ft.Page):
                     ),
                     ft.Container(
                         content=ft.Column([
-                            ft.Text("Gider", size=10, color="#991b1b"),
+                            ft.Text("Toplam Gider", size=10, color="#991b1b", weight=ft.FontWeight.W_500),
                             ft.Text(f"-{toplam_gider:,.0f} TL", size=12, weight=ft.FontWeight.BOLD, color="#b91c1c")
                         ], spacing=1, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                         bgcolor="#fee2e2",
@@ -7726,7 +7390,7 @@ def main(page: ft.Page):
                     ),
                     ft.Container(
                         content=ft.Column([
-                            ft.Text("Net Fark", size=10, color="#1e40af"),
+                            ft.Text("Net Fark", size=10, color="#1e40af", weight=ft.FontWeight.W_500),
                             ft.Text(f"{net_fark:+,.0f} TL", size=12, weight=ft.FontWeight.BOLD, color="#2563eb" if net_fark >= 0 else "#dc2626")
                         ], spacing=1, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                         bgcolor="#eff6ff",
@@ -9317,8 +8981,15 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                 if supabase:
                     res = supabase.table("islemler").select("*").order("id", desc=True).limit(2000).execute()
                     if res and res.data is not None:
+                        # Buluttan gelenler ile yerelde henüz id atanmamış yeni işlemleri harmanla
+                        bulut_idler = set(str(x.get("id")) for x in res.data if x.get("id"))
+                        yerel_yeni_islemler = [x for x in islemler if not x.get("id") or str(x.get("id")) not in bulut_idler]
+
                         islemler.clear()
+                        # Yerel yeni işlemler en başta kalır
+                        islemler.extend(yerel_yeni_islemler)
                         islemler.extend(res.data)
+
                         try:
                             u_map = urun_kategori_eslemeleri_oku()
                             for it in islemler:
