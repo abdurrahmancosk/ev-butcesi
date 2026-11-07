@@ -3416,7 +3416,7 @@ def main(page: ft.Page):
 
         # --- MODERN DASHBOARD KARTI & BİLEŞENLERİ ---
         kasa_baslik_metni = ft.Text("ELDEKİ TOPLAM PARA (KASA)", size=10, weight=ft.FontWeight.BOLD, color="#94a3b8")
-        kasa_tutar_metni = ft.Text("0,00 TL", size=24, weight=ft.FontWeight.BOLD, color="white")
+        kasa_tutar_metni = ft.Text("0,00 TL", size=24, weight=ft.FontWeight.BOLD, color="white", text_align=ft.TextAlign.CENTER)
 
         # Kullanıcı İsteği: Gelir, Gider ve Aylık Net kutucuklarının yükseklikleri birebir eşit olsun
         # ve tutarlar kutucuk içine estetik şekilde, taşmadan ortalı otursun.
@@ -3530,6 +3530,117 @@ def main(page: ft.Page):
             )
             show_app_dialog(page, aktarim_dialog)
 
+        # Kullanıcı İsteği:
+        # Abdurrahman kullanıcısında cüzdan simgesine tıklandığında hesaba gelen tüm para girişleri
+        # (maaş, ek ders, diğer gelirler ve gelen aktarımlar) dökülür.
+        def abdurrahman_girisler_modal_ac(e=None):
+            dokunma_geribildirimi()
+
+            # Abdurrahman'ın hesabına gelen tüm para girişlerini topla
+            gelen_girisler = []
+            for itm in islemler:
+                t_tur = itm.get("tur")
+                h_b = islem_hesap_bilgisi_coz(itm, varsayilan_kullanici="Abdurrahman")
+                if t_tur == "Gelir":
+                    # Abdurrahman'a ait tüm gelirler (maaş, ek ders, vb.)
+                    if h_b.get("kisi", "Abdurrahman") != "Hatice":
+                        gelen_girisler.append(itm)
+                elif t_tur == "Para Aktarımı":
+                    # Hatice'den Abdurrahman'a gelen aktarımlar
+                    alici_k = h_b.get("alici") or itm.get("hedef") or ""
+                    gonderen_k = h_b.get("gonderen") or itm.get("kullanici") or ""
+                    if "abdurrahman" in str(alici_k).lower() or "hatice" in str(gonderen_k).lower():
+                        gelen_girisler.append(itm)
+
+            # En yeni para girişi üstte olacak şekilde tarihe göre sırala
+            gelen_girisler.sort(key=islem_siralama_anahtari, reverse=True)
+            toplam_gelen = sum(float(x.get("tutar") or 0.0) for x in gelen_girisler)
+
+            liste_kolon = ft.Column([], spacing=8, scroll=ft.ScrollMode.AUTO)
+
+            if not gelen_girisler:
+                liste_kolon.controls.append(
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Icon(ft.Icons.SAVINGS_OUTLINED, size=36, color="#94a3b8"),
+                            ft.Text("Henüz hesabınıza gelen bir para girişi bulunmuyor.", size=12, color="#64748b", text_align=ft.TextAlign.CENTER)
+                        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+                        padding=20,
+                        alignment=get_alignment_center()
+                    )
+                )
+            else:
+                for akt in gelen_girisler:
+                    a_tutar = float(akt.get("tutar") or 0.0)
+                    a_tarih = akt.get("tarih") or ""
+                    a_saat = akt.get("saat") or ""
+                    a_tur = akt.get("tur") or "Gelir"
+                    a_ack = akt.get("aciklama") or akt.get("kaynak") or ("Maaş / Gelir" if a_tur == "Gelir" else "Nakit Transferi")
+                    kaynak_kategori = akt.get("kategori") or ("Gelir" if a_tur == "Gelir" else "Para Aktarımı")
+
+                    if a_tur == "Para Aktarımı":
+                        gonderen_ad = akt.get("kullanici") or "Hatice"
+                        detay_yazi = f"👤 {gonderen_ad} tarafından aktarıldı"
+                    else:
+                        detay_yazi = f"💼 {kaynak_kategori} Geliri"
+
+                    kart = ft.Container(
+                        content=ft.Row([
+                            ft.Row([
+                                ft.Container(
+                                    content=ft.Icon(ft.Icons.ARROW_DOWNWARD_ROUNDED, color="#2563eb", size=18),
+                                    bgcolor="#dbeafe",
+                                    border_radius=18,
+                                    width=34,
+                                    height=34,
+                                    alignment=get_alignment_center()
+                                ),
+                                ft.Column([
+                                    ft.Text(f"+{a_tutar:,.2f} TL", size=13, weight=ft.FontWeight.BOLD, color="#2563eb"),
+                                    ft.Text(detay_yazi, size=10.5, color="#1e293b", weight=ft.FontWeight.W_500),
+                                    ft.Text(f"📝 {a_ack}", size=10, color="#64748b", max_lines=1)
+                                ], spacing=2)
+                            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                            ft.Text(f"📅 {a_tarih} • 🕒 {a_saat}", size=10, color="#64748b", text_align=ft.TextAlign.RIGHT)
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        bgcolor="#f8fafc",
+                        border=make_border_all(1, "#e2e8f0"),
+                        border_radius=10,
+                        padding=make_padding(10, 8)
+                    )
+                    liste_kolon.controls.append(kart)
+
+            girisler_dialog = ft.AlertDialog(
+                title=ft.Row([
+                    ft.Icon(ft.Icons.PAYMENTS_ROUNDED, color="#2563eb", size=22),
+                    ft.Text("Hesaba Gelen Para Girişleri", size=15, weight=ft.FontWeight.BOLD)
+                ], spacing=6),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Text("Toplam Para Girişi:", size=11, color="#1e40af", weight=ft.FontWeight.BOLD),
+                                ft.Text(f"+{toplam_gelen:,.2f} TL ({len(gelen_girisler)} işlem)", size=12, color="#1d4ed8", weight=ft.FontWeight.BOLD)
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            bgcolor="#dbeafe",
+                            border=make_border_all(1, "#bfdbfe"),
+                            border_radius=8,
+                            padding=make_padding(10, 6)
+                        ),
+                        ft.Text("Tarih ve tutarlara göre tüm para girişleri:", size=11, color="#64748b"),
+                        ft.Container(content=liste_kolon, height=280)
+                    ], spacing=8, tight=True),
+                    width=330,
+                    height=360
+                ),
+                actions=[
+                    make_button("Kapat", outlined=True, height=32, on_click=lambda _: close_app_dialog(page, girisler_dialog))
+                ],
+                actions_alignment=ft.MainAxisAlignment.END
+            )
+            show_app_dialog(page, girisler_dialog)
+
+
         # Kullanıcı Gizlilik Kuralı:
         # Hatice kullanıcısı kasadaki toplam parayı veya Abdurrahman'ın gelir/bakiyesini görmez.
         # Hatice oturumunda sadece Hatice'nin kendi kalan nakit parası görünür.
@@ -3566,16 +3677,22 @@ def main(page: ft.Page):
             bakiye_karti = ft.Container(
                 content=ft.Column([
                     ft.Row([
+                        # Sol tarafta simetrik denge için boşluk konteyneri
+                        ft.Container(width=44),
+                        # Ortalanmış başlık ve büyük bakiye tutarı
                         ft.Column([
-                            ft.Text("ELDEKİ TOPLAM NAKİT HESAP", size=10.5, weight=ft.FontWeight.BOLD, color="#94a3b8"),
+                            ft.Text("ELDEKİ TOPLAM NAKİT HESAP", size=10.5, weight=ft.FontWeight.BOLD, color="#94a3b8", text_align=ft.TextAlign.CENTER),
                             kasa_tutar_metni
-                        ], spacing=2),
+                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
+                        # Sağ tarafta hesaba gelen para girişleri modalını açan cüzdan butonu
                         ft.Container(
                             content=ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, color="#38bdf8", size=24),
                             bgcolor="#1e293b",
                             border=make_border_all(1, "#334155"),
                             border_radius=12,
-                            padding=10
+                            padding=9,
+                            tooltip="Hesaba Gelen Para Girişlerini Gör",
+                            on_click=abdurrahman_girisler_modal_ac
                         )
                     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     ft.Container(height=4),
@@ -3585,7 +3702,7 @@ def main(page: ft.Page):
                             content=ft.Column([
                                 ft.Row([
                                     ft.Icon(ft.Icons.PERSON_ROUNDED, color="#60a5fa", size=15),
-                                    ft.Text("👑 Abdurrahman", size=11, color="#bfdbfe", weight=ft.FontWeight.BOLD)
+                                    ft.Text("👑 Abdurrahman", size=11, color="#bfdbfe", weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER)
                                 ], spacing=4, alignment=ft.MainAxisAlignment.CENTER),
                                 hesap_abdurrahman_txt
                             ], spacing=3, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
@@ -3601,26 +3718,26 @@ def main(page: ft.Page):
                             content=ft.Column([
                                 ft.Row([
                                     ft.Icon(ft.Icons.PERSON_ROUNDED, color="#34d399", size=15),
-                                    ft.Text("👤 Hatice", size=11, color="#a7f3d0", weight=ft.FontWeight.BOLD)
-                            ], spacing=4, alignment=ft.MainAxisAlignment.CENTER),
-                            hesap_hatice_txt
-                        ], spacing=3, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
-                        bgcolor="#064e3b",
-                        border=make_border_all(1.2, "#059669"),
-                        border_radius=12,
-                        padding=make_padding(6, 8),
-                        expand=1,
-                        height=58,
-                        alignment=get_alignment_center()
-                    ),
-                ], spacing=8)
-            ], spacing=6),
-            bgcolor="#0f172a",
-            border=make_border_all(1, "#1e293b"),
-            border_radius=18,
-            padding=16,
-            width=355,
-        )
+                                    ft.Text("👤 Hatice", size=11, color="#a7f3d0", weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER)
+                                ], spacing=4, alignment=ft.MainAxisAlignment.CENTER),
+                                hesap_hatice_txt
+                            ], spacing=3, horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
+                            bgcolor="#064e3b",
+                            border=make_border_all(1.2, "#059669"),
+                            border_radius=12,
+                            padding=make_padding(6, 8),
+                            expand=1,
+                            height=58,
+                            alignment=get_alignment_center()
+                        ),
+                    ], spacing=8)
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+                bgcolor="#0f172a",
+                border=make_border_all(1, "#1e293b"),
+                border_radius=18,
+                padding=16,
+                width=355,
+            )
         bakiye_metni = ft.Text("", visible=False)
         donem_metni = ft.Text(size=13, weight=ft.FontWeight.BOLD, color="#1e293b")
         liste_arayuzu = ft.ListView(height=420, spacing=2)
