@@ -4643,13 +4643,175 @@ def main(page: ft.Page):
                 else:
                     show_app_snackbar(page, "Lütfen geçerli bir anahtar girin.", color="#ef4444")
 
+            # Kullanıcı İsteği: Telefon İçin Kamera Açılması ve Anında Çekilen Fişi Algılama
+            son_fotolar_konteyner = ft.Column([], spacing=4)
+
+            def son_fotolari_ciz():
+                son_fotolar_konteyner.controls.clear()
+                guncel_fotolar = son_gorselleri_bul(limit=6)
+                if guncel_fotolar:
+                    manuel_yol_alani.value = guncel_fotolar[0]["yol"]
+                    foto_kartlari = []
+                    for foto in guncel_fotolar:
+                        yol = foto["yol"]
+                        ad = foto["ad"]
+                        zaman = foto["zaman"]
+                        foto_kartlari.append(
+                            ft.Container(
+                                content=ft.Row([
+                                    ft.Icon(ft.Icons.RECEIPT_LONG, color="#8b5cf6", size=18),
+                                    ft.Column([
+                                        ft.Text(ad, size=11, weight=ft.FontWeight.W_600, no_wrap=True, max_lines=1),
+                                        ft.Text(f"🕒 {zaman}", size=9, color="#64748b")
+                                    ], spacing=1, expand=True),
+                                    make_button("⚡ Oku", bgcolor="#8b5cf6", color="white", height=28, on_click=lambda _, y=yol: secilen_yolu_tara(y))
+                                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                                bgcolor="#f5f3ff",
+                                border=make_border_all(1, "#ddd6fe"),
+                                border_radius=8,
+                                padding=make_padding(6, 4)
+                            )
+                        )
+                    son_fotolar_konteyner.controls.extend([
+                        ft.Row([
+                            ft.Row([
+                                ft.Icon(ft.Icons.AUTO_AWESOME, color="#f59e0b", size=16),
+                                ft.Text("Algılanan Son Fiş Fotoğrafları:", weight=ft.FontWeight.BOLD, size=11.5, color="#1e293b")
+                            ], spacing=4),
+                            make_button("🔄 Yenile", height=24, outlined=True, on_click=lambda _: (dokunma_geribildirimi(), son_fotolari_ciz(), page.update()))
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        *foto_kartlari
+                    ])
+                else:
+                    son_fotolar_konteyner.controls.append(
+                        ft.Row([
+                            ft.Text("Henüz algılanan kamera fotoğrafı yok.", size=11, color="#64748b"),
+                            make_button("🔄 Yenile", height=24, outlined=True, on_click=lambda _: (dokunma_geribildirimi(), son_fotolari_ciz(), page.update()))
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+                    )
+
+            son_fotolari_ciz()
+
+            def kamera_ac_ve_cekim_bekle(ev=None):
+                dokunma_geribildirimi()
+                baslangic_zamani = time.time()
+                onceki_en_yeni_yol = son_fotolar[0]["yol"] if son_fotolar else None
+
+                # 1. Android yerel Kamera uygulamasını başlatmayı dene (pyjnius / Intent veya am start)
+                kamera_baslatildi = False
+                if platform_mobil_mi():
+                    try:
+                        from jnius import autoclass
+                        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+                        Intent = autoclass('android.content.Intent')
+                        act = PythonActivity.mActivity
+                        # Doğrudan tam ekran kamera uygulamasını açan standart Android intenti
+                        cam_intent = Intent("android.media.action.STILL_IMAGE_CAMERA")
+                        cam_intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        act.startActivity(cam_intent)
+                        kamera_baslatildi = True
+                    except Exception:
+                        try:
+                            from jnius import autoclass
+                            PythonActivity = autoclass('org.kivy.android.PythonActivity')
+                            Intent = autoclass('android.content.Intent')
+                            MediaStore = autoclass('android.provider.MediaStore')
+                            act = PythonActivity.mActivity
+                            cam_intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+                            act.startActivity(cam_intent)
+                            kamera_baslatildi = True
+                        except Exception:
+                            pass
+
+                    if not kamera_baslatildi:
+                        try:
+                            import subprocess
+                            subprocess.Popen(["am", "start", "-a", "android.media.action.STILL_IMAGE_CAMERA"])
+                            kamera_baslatildi = True
+                        except Exception:
+                            pass
+
+                # 2. Ayrıca Android/Mobil görsel seçiciyi (Kamera seçeneği destekli) tetikle
+                if not kamera_baslatildi:
+                    try:
+                        f_type = getattr(ft.FilePickerFileType, "IMAGE", None) if hasattr(ft, "FilePickerFileType") else None
+                        kwargs = {
+                            "dialog_title": "Kamerayla Çek veya Fotoğraf Seç",
+                            "allow_multiple": False,
+                            "with_data": True
+                        }
+                        if f_type is not None:
+                            kwargs["file_type"] = f_type
+                        res = galeri_picker.pick_files(**kwargs)
+                        if asyncio.iscoroutine(res):
+                            async def _await_cam_picker():
+                                try:
+                                    files = await res
+                                    if files and len(files) > 0:
+                                        f = files[0]
+                                        p = getattr(f, "path", None)
+                                        if not p and hasattr(f, "bytes") and f.bytes:
+                                            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
+                                                tf.write(f.bytes)
+                                                p = tf.name
+                                        if p and os.path.exists(str(p)):
+                                            close_app_dialog(page, fis_dialog)
+                                            fis_gorselini_tara_ve_goster(str(p))
+                                except Exception as ex_c:
+                                    print("Kamera seçici hatası:", ex_c)
+                            if hasattr(page, "run_task"):
+                                page.run_task(_await_cam_picker)
+                            else:
+                                threading.Thread(target=lambda: asyncio.run(_await_cam_picker()), daemon=True).start()
+                    except Exception as ex_p:
+                        print("Kamera FilePicker yedek hatası:", ex_p)
+
+                show_app_snackbar(
+                    page,
+                    "📷 Kamera açılıyor... Fişin fotoğrafını çektiğinizde otomatik algılanıp taranacaktır!",
+                    color="#10b981"
+                )
+
+                # 3. Arka planda DCIM/Camera klasörünü 90 saniye boyunca izle: yeni fotoğraf çekildiği an otomatik tara!
+                def _yeni_cekilen_fisi_izle():
+                    for _ in range(90):
+                        time.sleep(1.0)
+                        try:
+                            guncel = son_gorselleri_bul(limit=1)
+                            if guncel:
+                                en_yeni = guncel[0]
+                                y_yol = en_yeni["yol"]
+                                try:
+                                    mtime = os.path.getmtime(y_yol)
+                                except Exception:
+                                    mtime = 0
+                                if y_yol != onceki_en_yeni_yol and mtime >= (baslangic_zamani - 2.0):
+                                    # Dosyanın diske yazılmasının tamamlanması için kısa bekleme
+                                    time.sleep(0.8)
+                                    close_app_dialog(page, fis_dialog)
+                                    show_app_snackbar(page, f"📸 Yeni çekilen fiş algılandı ({en_yeni['ad']}), analiz ediliyor...", color="#10b981")
+                                    fis_gorselini_tara_ve_goster(y_yol)
+                                    return
+                        except Exception:
+                            pass
+
+                threading.Thread(target=_yeni_cekilen_fisi_izle, daemon=True).start()
+
             dialog_icerik = [
                 make_button(
-                    "📁 Fişleri Seç (Tekli veya Çoklu Toplu Seçim)",
+                    "📷 Kamerayı Aç & Fiş Çek (Otomatik Algılar)",
+                    icon=ft.Icons.PHOTO_CAMERA_ROUNDED,
+                    bgcolor="#10b981",
+                    color="white",
+                    height=44,
+                    on_click=kamera_ac_ve_cekim_bekle
+                ),
+                make_button(
+                    "📁 Galeriden Fiş Seç (Tekli veya Çoklu Seçim)",
                     icon=ft.Icons.PHOTO_LIBRARY,
                     bgcolor="#2563eb",
                     color="white",
-                    height=44,
+                    height=42,
                     on_click=galeri_tiklandi_aksiyon
                 )
             ]
@@ -4675,39 +4837,7 @@ def main(page: ft.Page):
                 )
 
             dialog_icerik.append(ft.Divider(height=10, color="#e2e8f0"))
-
-            # Telefon Galerisindeki / Bilgisayardaki Son Fotoğraflar
-            if son_fotolar:
-                foto_kartlari = []
-                for foto in son_fotolar:
-                    yol = foto["yol"]
-                    ad = foto["ad"]
-                    zaman = foto["zaman"]
-                    foto_kartlari.append(
-                        ft.Container(
-                            content=ft.Row([
-                                ft.Icon(ft.Icons.RECEIPT_LONG, color="#8b5cf6", size=18),
-                                ft.Column([
-                                    ft.Text(ad, size=11, weight=ft.FontWeight.W_600, no_wrap=True, max_lines=1),
-                                    ft.Text(f"🕒 {zaman}", size=9, color="#64748b")
-                                ], spacing=1, expand=True),
-                                make_button("⚡ Oku", bgcolor="#8b5cf6", color="white", height=28, on_click=lambda _, y=yol: secilen_yolu_tara(y))
-                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                            bgcolor="#f5f3ff",
-                            border=make_border_all(1, "#ddd6fe"),
-                            border_radius=8,
-                            padding=make_padding(6, 4)
-                        )
-                    )
-                dialog_icerik.append(
-                    ft.Column([
-                        ft.Row([
-                            ft.Icon(ft.Icons.AUTO_AWESOME, color="#f59e0b", size=16),
-                            ft.Text("Algılanan Son Fiş Fotoğrafları:", weight=ft.FontWeight.BOLD, size=12, color="#1e293b")
-                        ], spacing=4),
-                        *foto_kartlari
-                    ], spacing=4)
-                )
+            dialog_icerik.append(son_fotolar_konteyner)
 
             # Metin ve Manuel Yol Seçenekleri
             dialog_icerik.extend([
