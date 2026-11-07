@@ -1,5 +1,0 @@
-flet
-flet-camera
-flet-permission-handler
-supabase
-pillow
