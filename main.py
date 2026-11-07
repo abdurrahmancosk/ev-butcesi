@@ -2035,7 +2035,11 @@ KATEGORİ KURALLARI (ÇOK ÖNEMLİ):
 5. 'Ev & Faturalar': Doğalgaz, elektrik, su, internet, telefon faturaları, kira, aidat, ev gereçleri.
 6. 'Ulaşım / Yakıt': Benzin, motorin, lpg, otobüs, dolmuş, taksi, otopark.
 7. 'Dışarıda Yemek / Eğlence': Restoran, kafe, döner, kebap, fast food.
-8. 'Sağlık': Eczane, ilaç, vitamin, medikal."""
+8. 'Sağlık': Eczane, ilaç, vitamin, medikal.
+
+ÜRÜN BİRLEŞTİRME KURALI (KESİNLİKLE UYGULA):
+- Fişte aynı üründen birden fazla satırda ayrı ayrı yazılmış olsa bile (örneğin 3 defa 'Ekmek' veya 2 defa 'Süt 1L'), bunları ASLA ayrı ayrı satırlar halinde döndürme!
+- Aynı ürünü TEK BİR nesne olarak birleştir, adet/miktar bilgisini topla (örn: '3 Adet'), birim fiyatı koru ve toplam tutarı çarpım olarak tek satırda yaz!"""
 
     if ext == ".txt":
         raw_txt = img_bytes.decode("utf-8", errors="replace")
@@ -4554,7 +4558,40 @@ def main(page: ft.Page):
                         f_firma = market_adi_duzelt(f_veri.get("firma") or "Market")
                         f_tarih = standart_tarih_yap(f_veri.get("tarih"))
                         f_saat = str(f_veri.get("saat") or "12:00").strip()[:5]
-                        f_urunler = f_veri.get("urunler") or []
+                        raw_urunler = f_veri.get("urunler") or []
+
+                        # Kullanıcı İsteği: Aynı fişte bir üründen birden fazla alınmışsa tek işlemde adet sayısını birleştir
+                        birlestirilmis_urunler = []
+                        gorulen_indeksler = {}
+
+                        def _miktar_ve_birim_ayristir(m_val):
+                            s = str(m_val or "").strip().replace(",", ".")
+                            m = re.search(r'[-+]?\d*\.?\d+', s)
+                            sayi = float(m.group(0)) if m else 1.0
+                            birim = re.sub(r'[-+]?\d*\.?\d+', '', s).strip() or "Adet"
+                            return sayi, birim
+
+                        for u in raw_urunler:
+                            u_isim = str(u.get("urun") or "").strip()
+                            u_norm = tr_normalize_key(u_isim)
+                            u_bf = float(u.get("birim_fiyat") or u.get("tutar") or 0.0)
+                            u_tut = float(u.get("tutar") or u_bf)
+                            u_sayi, u_birim = _miktar_ve_birim_ayristir(u.get("miktar"))
+
+                            anahtar = (u_norm, round(u_bf, 2))
+                            if u_norm and anahtar in gorulen_indeksler:
+                                hedef = gorulen_indeksler[anahtar]
+                                e_sayi, e_birim = _miktar_ve_birim_ayristir(hedef.get("miktar"))
+                                yeni_top_sayi = e_sayi + u_sayi
+                                fmt_sayi = int(yeni_top_sayi) if yeni_top_sayi.is_integer() else f"{yeni_top_sayi:.2f}"
+                                hedef["miktar"] = f"{fmt_sayi} {e_birim or u_birim}"
+                                hedef["tutar"] = float(hedef.get("tutar") or 0.0) + u_tut
+                            else:
+                                u_kopyasi = dict(u)
+                                gorulen_indeksler[anahtar] = u_kopyasi
+                                birlestirilmis_urunler.append(u_kopyasi)
+
+                        f_urunler = birlestirilmis_urunler
                         f_toplam = float(f_veri.get("toplam_tutar") or 0.0)
 
                         f_mukerrer_sayisi = 0
@@ -7083,24 +7120,37 @@ def main(page: ft.Page):
                         islemler.clear()
                         islemler.extend(yerel_yeni)
                         islemler.extend(res.data)
-                        islemler_yerel_cache_kaydet(islemler)
-                    # Market isimlerini ve %100 aynı ürün kategorilerini otomatik normalize et
-                    try:
-                        u_map = urun_kategori_eslemeleri_oku()
-                        for it in islemler:
-                            if it.get("tur") == "Gider":
-                                if it.get("firma"):
-                                    duz = market_adi_duzelt(it["firma"])
-                                    if duz != it["firma"]:
-                                        it["firma"] = duz
-                                if u_map and it.get("urun"):
-                                    u_n = tr_normalize_key(it["urun"])
-                                    if u_n in u_map and it.get("kategori") != u_map[u_n]:
-                                        it["kategori"] = u_map[u_n]
-                    except Exception:
-                        pass
-                        yeni_adet = len(islemler)
 
+                        # Market isimlerini ve %100 aynı ürün kategorilerini otomatik normalize et
+                        try:
+                            u_map = urun_kategori_eslemeleri_oku()
+                            for it in islemler:
+                                if it.get("tur") == "Gider":
+                                    if it.get("firma"):
+                                        duz = market_adi_duzelt(it["firma"])
+                                        if duz != it["firma"]:
+                                            it["firma"] = duz
+                                    if u_map and it.get("urun"):
+                                        u_n = tr_normalize_key(it["urun"])
+                                        if u_n in u_map and it.get("kategori") != u_map[u_n]:
+                                            it["kategori"] = u_map[u_n]
+                        except Exception:
+                            pass
+
+                        islemler_yerel_cache_kaydet(islemler)
+
+                        # Dönem başlığını en yeni işleme göre tazele
+                        en_yeni_t = None
+                        for it in islemler:
+                            dt = stringden_tarih_al(it.get("tarih"))
+                            if dt and (not en_yeni_t or dt > en_yeni_t):
+                                en_yeni_t = dt
+                        if en_yeni_t:
+                            p_bas, p_bit = aktif_butce_donemini_bul(en_yeni_t)
+                            secilen_donem_bas[0] = p_bas
+                            secilen_donem_bit[0] = p_bit
+
+                        yeni_adet = len(islemler)
                         arayuzu_guncelle()
 
                         fark = yeni_adet - onceki_adet
@@ -9136,59 +9186,60 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
         def arka_plan_bildirim_tara():
             while True:
                 try:
-                    time.sleep(14)
+                    time.sleep(5)
                     if not supabase:
                         continue
-                    res = supabase.table("islemler").select("*").order("id", desc=True).limit(25).execute()
+                    res = supabase.table("islemler").select("*").order("id", desc=True).limit(30).execute()
                     if res and res.data:
-                        yeni_bulunanlar = []
+                        degisiklik_var = False
                         for it in res.data:
                             it_id_str = str(it.get("id"))
                             if it_id_str and it_id_str not in bilinen_islem_idler:
                                 bilinen_islem_idler.add(it_id_str)
-                                it_kull = str(it.get("kullanici", "")).strip()
-                                # Eğer işlem diğer kullanıcı tarafından yapılmışsa
-                                if it_kull and it_kull.lower() != kullanici.lower():
-                                    yeni_bulunanlar.append(it)
-                        if yeni_bulunanlar:
-                            for it in yeni_bulunanlar:
-                                if it not in islemler:
+                                degisiklik_var = True
+                                if not any(str(x.get("id")) == it_id_str for x in islemler):
                                     islemler.insert(0, it)
+
+                                it_kull = str(it.get("kullanici", "")).strip()
                                 tur_it = it.get("tur", "Gider")
                                 tutar_it = float(it.get("tutar") or 0.0)
                                 kim_it = it.get("kullanici") or "Aile Üyesi"
-                                if tur_it == "Gelir":
-                                    b_bas = f"💰 Yeni Gelir: {it.get('gelir_turu') or it.get('kaynak') or 'Gelir'}"
-                                    b_mes = f"{kim_it} +{tutar_it:,.2f} TL yeni gelir ekledi."
-                                elif tur_it == "Para Aktarımı":
-                                    b_bas = f"💸 Para Aktarımı: {it.get('kaynak') or 'Aktarım'}"
-                                    b_mes = f"{kim_it} {tutar_it:,.2f} TL aktarım yaptı."
-                                else:
-                                    b_bas = f"🛒 Yeni Harcama: {it.get('firma') or 'Market'}"
-                                    b_mes = f"{kim_it} {tutar_it:,.2f} TL harcama ekledi ({it.get('urun') or it.get('kategori') or 'Ürün'})."
 
-                                simdi_it = datetime.datetime.now()
-                                yeni_bld_it = {
-                                    "id": f"bld_{it.get('id')}_{int(time.time())}",
-                                    "islem_id": it.get("id"),
-                                    "tur": tur_it,
-                                    "gonderen": kim_it,
-                                    "alici": kullanici,
-                                    "baslik": b_bas,
-                                    "mesaj": b_mes,
-                                    "tutar": tutar_it,
-                                    "tarih": it.get("tarih") or simdi_it.strftime("%d.%m.%Y"),
-                                    "saat": it.get("saat") or simdi_it.strftime("%H:%M"),
-                                    "okundu": False
-                                }
-                                bildirim_ekle(yeni_bld_it)
-                                canli_bildirim_goster(b_bas, b_mes, tur_it)
+                                if it_kull and it_kull.lower() != kullanici.lower():
+                                    if tur_it == "Gelir":
+                                        b_bas = f"💰 Yeni Gelir: {it.get('gelir_turu') or it.get('kaynak') or 'Gelir'}"
+                                        b_mes = f"{kim_it} +{tutar_it:,.2f} TL yeni gelir ekledi."
+                                    elif tur_it == "Para Aktarımı":
+                                        b_bas = f"💸 Para Aktarımı: {it.get('kaynak') or 'Aktarım'}"
+                                        b_mes = f"{kim_it} {tutar_it:,.2f} TL aktarım yaptı."
+                                    else:
+                                        b_bas = f"🛒 Yeni Harcama: {it.get('firma') or 'Market'}"
+                                        b_mes = f"{kim_it} {tutar_it:,.2f} TL harcama ekledi ({it.get('urun') or it.get('kategori') or 'Ürün'})."
+
+                                    simdi_it = datetime.datetime.now()
+                                    yeni_bld_it = {
+                                        "id": f"bld_{it.get('id')}_{int(time.time())}",
+                                        "islem_id": it.get("id"),
+                                        "tur": tur_it,
+                                        "gonderen": kim_it,
+                                        "alici": kullanici,
+                                        "baslik": b_bas,
+                                        "mesaj": b_mes,
+                                        "tutar": tutar_it,
+                                        "tarih": it.get("tarih") or simdi_it.strftime("%d.%m.%Y"),
+                                        "saat": it.get("saat") or simdi_it.strftime("%H:%M"),
+                                        "okundu": False
+                                    }
+                                    bildirim_ekle(yeni_bld_it)
+                                    canli_bildirim_goster(b_bas, b_mes, tur_it)
+
+                        if degisiklik_var:
+                            islemler_yerel_cache_kaydet(islemler)
                             bildirim_sayaci_guncelle()
                             arayuzu_guncelle()
                 except Exception as ex_tara:
                     pass
 
-        # Açılışta arka planda buluttan güncel kayıtları çek ve otomatik harçlığı kontrol et (Arayüzü asla bekletmez!)
         def _acilis_bulut_senkronizasyonu():
             try:
                 if supabase:
