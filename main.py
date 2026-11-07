@@ -2525,13 +2525,24 @@ def main(page: ft.Page):
                 toplu_yollar = []
                 for f in secilen_dosyalar:
                     p = getattr(f, "path", None)
-                    # Android'de path bazen doğrudan string ya da bytes olarak gelir
-                    if not p and hasattr(f, "name") and f.name:
-                        p = f.name
-                    if not p and hasattr(f, "bytes") and f.bytes:
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                            tf.write(f.bytes)
-                            p = tf.name
+                    b = getattr(f, "bytes", None)
+
+                    # 1. Eğer dosya baytları (bytes) varsa (Android with_data=True veya sanal depolama) doğrudan diske yaz
+                    if b:
+                        fname = getattr(f, "name", "fis.jpg") or "fis.jpg"
+                        ext = os.path.splitext(fname)[1].lower() if fname else ".jpg"
+                        if ext not in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic"]:
+                            ext = ".jpg"
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tf:
+                            tf.write(b)
+                            toplu_yollar.append(tf.name)
+                        continue
+
+                    # 2. Eğer dosya yolu mevcutsa ve dosyaya erişilebiliyorsa
+                    if p and os.path.exists(str(p)):
+                        toplu_yollar.append(str(p))
+                        continue
+
                     if p:
                         toplu_yollar.append(str(p))
 
@@ -5053,16 +5064,37 @@ def main(page: ft.Page):
                     except Exception as ex_tk:
                         pass
 
-                # Mobilde (Android) FilePicker tetikleme
+                # Mobilde (Android) FilePicker tetikleme (Yalnızca Resim Modu & with_data=True)
                 try:
                     if hasattr(page, "services") and galeri_picker not in page.services:
                         page.services.append(galeri_picker)
-                    galeri_picker.pick_files(
-                        dialog_title="Fiş Fotoğrafı Seçin",
-                        allow_multiple=True
-                    )
+                    elif hasattr(page, "_services") and galeri_picker not in page._services:
+                        page._services.append(galeri_picker)
+
+                    img_ft = ft.FilePickerFileType.IMAGE if hasattr(ft, "FilePickerFileType") else "image"
+                    try:
+                        galeri_picker.pick_files(
+                            dialog_title="Fiş Fotoğrafı Seçin",
+                            file_type=img_ft,
+                            with_data=True,
+                            allow_multiple=True
+                        )
+                    except TypeError:
+                        galeri_picker.pick_files(
+                            dialog_title="Fiş Fotoğrafı Seçin",
+                            file_type=img_ft,
+                            allow_multiple=True
+                        )
                 except Exception as ex_p:
                     print("Galeri seçici tetikleme hatası:", ex_p)
+                    try:
+                        galeri_picker.pick_files(
+                            dialog_title="Fiş Fotoğrafı Seçin",
+                            allow_multiple=False
+                        )
+                    except Exception as ex_p2:
+                        print("Yedek seçici hatası:", ex_p2)
+                        show_app_snackbar(page, "Galeri açılamadı, lütfen depolama izinlerini kontrol edin.", color="#ef4444")
 
             def metin_coz_tetikle(ev):
                 raw = metin_alani.value.strip()
@@ -5153,7 +5185,7 @@ def main(page: ft.Page):
 
             dialog_icerik = [
                 make_button(
-                    "📁 Galeriden Fiş Seç (Fotoğraf / PDF)",
+                    "📁 Galeriden Fiş Fotoğrafı Seç",
                     icon=ft.Icons.PHOTO_LIBRARY_ROUNDED,
                     bgcolor="#2563eb",
                     color="white",
