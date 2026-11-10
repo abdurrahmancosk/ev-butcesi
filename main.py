@@ -28,6 +28,22 @@ except Exception:
 # ==============================================================================
 import difflib
 
+def supabase_temiz_veri(veri):
+    """
+    Supabase 'islemler' tablosuna gönderilen sözlükten yalnızca veritabanında var olan geçerli sütunları süzer.
+    eklenme_ts, birim, id gibi yabancı alanları temizleyerek 400 Bad Request hatasını kesin olarak önler.
+    """
+    if isinstance(veri, list):
+        return [supabase_temiz_veri(x) for x in veri]
+    if not isinstance(veri, dict):
+        return veri
+    gecerli_sutunlar = {
+        "kullanici", "tur", "tarih", "saat", "kaynak", "gelir_turu",
+        "aciklama", "firma", "urun", "kategori", "miktar", "birim_fiyat", "tutar"
+    }
+    return {k: v for k, v in veri.items() if k in gecerli_sutunlar}
+
+
 # ==============================================================================
 # Akıllı Birim Tahmin ve Ayrıştırma Motoru (Kullanıcı İsteği: Litre, Kg, Adet, Gram)
 # ==============================================================================
@@ -1556,7 +1572,7 @@ def market_adi_duzelt(ham_firma):
 
     for k, v in mapping.items():
         k_norm = tr_normalize_key(k)
-        if k_norm and (k_norm == f_norm or k_norm in f_norm):
+        if k_norm and (k_norm == f_norm):
             return v
 
     return f_clean
@@ -4643,7 +4659,7 @@ def main(page: ft.Page):
                             chunk_size = 50
                             for i in range(0, len(yeni_eklenenler), chunk_size):
                                 chunk = yeni_eklenenler[i:i + chunk_size]
-                                res = supabase.table("islemler").insert(chunk).execute()
+                                res = supabase.table("islemler").insert(supabase_temiz_veri(chunk)).execute()
                                 if res.data:
                                     for idx, item_res in enumerate(res.data):
                                         chunk[idx]["id"] = item_res.get("id")
@@ -5106,8 +5122,9 @@ def main(page: ft.Page):
 
                                 if supabase:
                                     try:
-                                        res = supabase.table("islemler").insert(yeni_kayit).execute()
+                                        res = supabase.table("islemler").insert(supabase_temiz_veri(yeni_kayit)).execute()
                                         if res and res.data and len(res.data) > 0 and res.data[0].get("id"):
+
                                             yeni_kayit["id"] = int(res.data[0]["id"])
                                     except Exception as db_err:
                                         print("Supabase toplu fiş kayıt hatası:", db_err)
@@ -6431,11 +6448,32 @@ def main(page: ft.Page):
                     item["kaynak"] = duzenle_alici.value.strip()
                     item["aciklama"] = duzenle_aciklama.value.strip()
 
-                if supabase and item.get("id"):
-                    try:
-                        supabase.table("islemler").update(item).eq("id", item["id"]).execute()
-                    except Exception as db_err:
-                        print("Supabase güncelleme hatası:", db_err)
+                # 1. YEREL DİSK CACHE'İNE ANINDA YAZ (Uygulama yeniden başladığında asla eski haline dönmez!)
+                islemler_yerel_cache_kaydet(islemler)
+
+                # 2. BULUTA TEMİZ SÜTUNLARLA ANINDA VE KESİN GÜNCELLEME
+                clean_payload = supabase_temiz_veri(item)
+                if supabase:
+                    def _arka_plan_bulut_guncelle():
+                        try:
+                            res_up = None
+                            if item.get("id"):
+                                res_up = supabase.table("islemler").update(clean_payload).eq("id", item["id"]).execute()
+                            if not res_up or not res_up.data:
+                                res_ins = supabase.table("islemler").insert(clean_payload).execute()
+                                if res_ins and res_ins.data and len(res_ins.data) > 0 and res_ins.data[0].get("id"):
+                                    item["id"] = res_ins.data[0]["id"]
+                                    islemler_yerel_cache_kaydet(islemler)
+                        except Exception as db_err:
+                            print("Supabase işlem güncelleme hatası:", db_err)
+                            try:
+                                res_ins = supabase.table("islemler").insert(clean_payload).execute()
+                                if res_ins and res_ins.data and len(res_ins.data) > 0 and res_ins.data[0].get("id"):
+                                    item["id"] = res_ins.data[0]["id"]
+                                    islemler_yerel_cache_kaydet(islemler)
+                            except Exception:
+                                pass
+                    threading.Thread(target=_arka_plan_bulut_guncelle, daemon=True).start()
 
                 close_app_dialog(page, duzenle_dialog)
                 arayuzu_guncelle()
@@ -7123,8 +7161,8 @@ def main(page: ft.Page):
 
                 if supabase:
                     try:
-                        res = supabase.table("islemler").insert(yeni_kayit).execute()
-                        if res.data:
+                        res = supabase.table("islemler").insert(supabase_temiz_veri(yeni_kayit)).execute()
+                        if res and res.data:
                             yeni_kayit["id"] = res.data[0]["id"]
                     except Exception as ex:
                         print("Bulut kayıt hatası:", ex)
@@ -7176,8 +7214,9 @@ def main(page: ft.Page):
 
                 if supabase:
                     try:
-                        res = supabase.table("islemler").insert(yeni_kayit).execute()
+                        res = supabase.table("islemler").insert(supabase_temiz_veri(yeni_kayit)).execute()
                         if res and res.data and len(res.data) > 0 and res.data[0].get("id"):
+
                             yeni_kayit["id"] = res.data[0]["id"]
                     except Exception as ex:
                         print("Bulut aktarım kayıt hatası:", ex)
@@ -7263,8 +7302,8 @@ def main(page: ft.Page):
 
                 if supabase:
                     try:
-                        res = supabase.table("islemler").insert(yeni_kayit).execute()
-                        if res.data:
+                        res = supabase.table("islemler").insert(supabase_temiz_veri(yeni_kayit)).execute()
+                        if res and res.data:
                             yeni_kayit["id"] = res.data[0]["id"]
                     except Exception as ex:
                         print("Bulut kayıt hatası:", ex)
@@ -9250,7 +9289,7 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
 
                     if supabase:
                         try:
-                            res = supabase.table("islemler").insert(yeni_islem).execute()
+                            res = supabase.table("islemler").insert(supabase_temiz_veri(yeni_islem)).execute()
                             if res and res.data and len(res.data) > 0 and res.data[0].get("id"):
                                 yeni_islem["id"] = res.data[0]["id"]
                         except Exception as db_err:
@@ -9563,7 +9602,7 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                             print(f"📤 Buluta aktarılacak {len(yerel_kalanlar)} adet yerel işlem tespit edildi (Erzurum Kart vb.)...")
                             for y_it in yerel_kalanlar:
                                 try:
-                                    res_up = supabase.table("islemler").insert(y_it).execute()
+                                    res_up = supabase.table("islemler").insert(supabase_temiz_veri(y_it)).execute()
                                     if res_up and res_up.data and len(res_up.data) > 0:
                                         y_it["id"] = res_up.data[0]["id"]
                                         y_it["created_at"] = res_up.data[0].get("created_at")
