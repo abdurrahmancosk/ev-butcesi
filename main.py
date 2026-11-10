@@ -7396,6 +7396,23 @@ def main(page: ft.Page):
                         islemler.extend(yerel_yeni)
                         islemler.extend(res.data)
 
+                        temiz_islem = mukerrer_kayitlari_temizle(islemler)
+                        if len(temiz_islem) != len(islemler):
+                            temiz_ids = set(id(x) for x in temiz_islem)
+                            fazla_bulut_idler = [x.get("id") for x in islemler if id(x) not in temiz_ids and x.get("id")]
+                            islemler.clear()
+                            islemler.extend(temiz_islem)
+                            if supabase and fazla_bulut_idler:
+                                def _buluttan_fazla_sil_yenile():
+                                    try:
+                                        chunk_s = 50
+                                        for c_idx in range(0, len(fazla_bulut_idler), chunk_s):
+                                            c_sub = fazla_bulut_idler[c_idx:c_idx + chunk_s]
+                                            supabase.table("islemler").delete().in_("id", c_sub).execute()
+                                    except Exception:
+                                        pass
+                                threading.Thread(target=_buluttan_fazla_sil_yenile, daemon=True).start()
+
                         # Market isimlerini ve %100 aynı ürün kategorilerini otomatik normalize et
                         try:
                             u_map = urun_kategori_eslemeleri_oku()
@@ -9474,7 +9491,22 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                             it_id_str = str(it.get("id"))
                             if it_id_str and it_id_str not in bilinen_islem_idler:
                                 bilinen_islem_idler.add(it_id_str)
-                                if not any(str(x.get("id")) == it_id_str for x in islemler):
+                                # Aynı tarih, saat, firma, urun ve tutara sahip kayıt zaten varsa ASLA mükerrer ekleme
+                                it_t = str(it.get("tarih") or "").strip()
+                                it_s = str(it.get("saat") or "").strip()[:5]
+                                it_f = str(it.get("firma") or "").strip().lower()
+                                it_u = str(it.get("urun") or "").strip().lower()
+                                it_tut = round(float(it.get("tutar") or 0.0), 2)
+                                ztn_var = any(
+                                    str(x.get("id")) == it_id_str or (
+                                        str(x.get("tarih") or "").strip() == it_t and
+                                        str(x.get("saat") or "").strip()[:5] == it_s and
+                                        str(x.get("firma") or "").strip().lower() == it_f and
+                                        str(x.get("urun") or "").strip().lower() == it_u and
+                                        round(float(x.get("tutar") or 0.0), 2) == it_tut
+                                    ) for x in islemler
+                                )
+                                if not ztn_var:
                                     # Buluttan yeni gelen işlemin eklenme zaman damgasını created_at'ten veya şu anki zamandan ata
                                     if not it.get("eklenme_ts"):
                                         if it.get("created_at"):
@@ -9538,6 +9570,25 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                                 except Exception:
                                     pass
                         islemler.extend(res.data)
+                        
+                        # Kullanıcı Kuralı: Doğalgaz, yumurta vb. mükerrer kayıtları kesin olarak temizle ve hesabı düzelt
+                        temiz_islem = mukerrer_kayitlari_temizle(islemler)
+                        if len(temiz_islem) != len(islemler):
+                            temiz_ids = set(id(x) for x in temiz_islem)
+                            fazla_bulut_idler = [x.get("id") for x in islemler if id(x) not in temiz_ids and x.get("id")]
+                            islemler.clear()
+                            islemler.extend(temiz_islem)
+                            if supabase and fazla_bulut_idler:
+                                def _buluttan_fazla_sil():
+                                    try:
+                                        chunk_s = 50
+                                        for c_idx in range(0, len(fazla_bulut_idler), chunk_s):
+                                            c_sub = fazla_bulut_idler[c_idx:c_idx + chunk_s]
+                                            supabase.table("islemler").delete().in_("id", c_sub).execute()
+                                        print(f"✅ Buluttaki {len(fazla_bulut_idler)} mükerrer işlem temizlendi.")
+                                    except Exception as ex_f:
+                                        print("Bulut mükerrer temizleme hatası:", ex_f)
+                                threading.Thread(target=_buluttan_fazla_sil, daemon=True).start()
 
                         try:
                             u_map = urun_kategori_eslemeleri_oku()
