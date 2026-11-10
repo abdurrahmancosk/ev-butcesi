@@ -1625,12 +1625,8 @@ def bildirim_ekle(bildirim_obj):
     return False
 
 def telefon_push_bildirim_gonder(alici, baslik, mesaj, islem_turu="Gider", tutar=0.0):
-    """
-    Kullanıcı isteği: Abdurrahman veya Hatice sisteme işlem eklediğinde,
-    uygulama açık olmasa dahi Android telefon ekranının üstünde kayar (heads-up) bildirim çıkar.
-    ntfy.sh yüksek öncelikli (urgent/5) kanalı ile doğrudan Android Heads-Up bildirimi tetiklenir.
-    Hem hedef kullanıcı kanalına hem de ortak aile kanalına çift yönlü gönderilir.
-    """
+    """Kullanıcı İsteği: Bildirim sistemi tamamen kapatıldı; harcamalar 'Yeni Eklendi' rozetiyle takip ediliyor."""
+    return False
     import urllib.request
     import base64
 
@@ -1675,7 +1671,8 @@ def telefon_push_bildirim_gonder(alici, baslik, mesaj, islem_turu="Gider", tutar
     return basarili_mi
 
 def bildirim_olustur_ve_gonder(islem, gonderen=None):
-    """İşlem eklendiğinde karşı tarafa hem sistem push bildirimi hem de uygulama içi bildirim iletir."""
+    """Kullanıcı İsteği: Bildirim işine son verildi; kargaşa ve sistem yavaşlaması önlendi."""
+    return
     gonderen_ad = gonderen or islem.get("kullanici") or "Abdurrahman"
     if "abdurrahman" in gonderen_ad.lower():
         alici_ad = "Hatice"
@@ -8532,6 +8529,7 @@ def main(page: ft.Page):
                 pass
 
         def canli_bildirim_goster(baslik, mesaj, tur="Gider"):
+            return
             canli_bildirim_baslik.value = baslik
             canli_bildirim_mesaj.value = mesaj
             if tur == "Gelir":
@@ -9506,22 +9504,8 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
                                         b_bas = f"🛒 Yeni Harcama: {it.get('firma') or 'Market'}"
                                         b_mes = f"{kim_it} {tutar_it:,.2f} TL harcama ekledi ({it.get('urun') or it.get('kategori') or 'Ürün'})."
 
-                                    simdi_it = datetime.datetime.now()
-                                    yeni_bld_it = {
-                                        "id": f"bld_{it.get('id')}_{int(time.time())}",
-                                        "islem_id": it.get("id"),
-                                        "tur": tur_it,
-                                        "gonderen": kim_it,
-                                        "alici": kullanici,
-                                        "baslik": b_bas,
-                                        "mesaj": b_mes,
-                                        "tutar": tutar_it,
-                                        "tarih": it.get("tarih") or simdi_it.strftime("%d.%m.%Y"),
-                                        "saat": it.get("saat") or simdi_it.strftime("%H:%M"),
-                                        "okundu": False
-                                    }
-                                    bildirim_ekle(yeni_bld_it)
-                                    canli_bildirim_goster(b_bas, b_mes, tur_it)
+                                    # Kullanıcı İsteği: Eski bildirimlerin peş peşe gelmesi ve sistemi yavaşlatması engellendi.
+                                    pass
 
                         if degisiklik_var:
                             islemler_yerel_cache_kaydet(islemler)
