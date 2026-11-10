@@ -2733,8 +2733,8 @@ def main(page: ft.Page):
     page.title = "Hane Bütçesi Takip Sistemi"
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.scroll = ft.ScrollMode.AUTO
-    page.bgcolor = "#f1f5f9"
-    page.theme_mode = ft.ThemeMode.LIGHT
+    page.bgcolor = "#0b132b"
+    page.theme_mode = ft.ThemeMode.DARK
 
     try:
         if hasattr(page, "window"):
@@ -2789,7 +2789,7 @@ def main(page: ft.Page):
                     pass
         aktif_tema_modu = tema_oku()
         if aktif_tema_modu == "light":
-            page.theme_mode = ft.ThemeMode.LIGHT
+            page.theme_mode = ft.ThemeMode.DARK
             page.bgcolor = "#f8fafc"
         elif aktif_tema_modu == "dark":
             page.theme_mode = ft.ThemeMode.DARK
@@ -3945,7 +3945,7 @@ def main(page: ft.Page):
                 width=355,
             )
         bakiye_metni = ft.Text("", visible=False)
-        donem_metni = ft.Text(size=13, weight=ft.FontWeight.BOLD, color="#1e293b")
+        donem_metni = ft.Text(size=13, weight=ft.FontWeight.BOLD, color="#f8fafc")
         liste_arayuzu = ft.ListView(height=420, spacing=2)
         bilgi_mesaji = ft.Text("", size=12)
 
@@ -3961,21 +3961,21 @@ def main(page: ft.Page):
 
         filtre_tumu_btn = ft.Container(
             content=ft.Text("Tümü", size=11, weight=ft.FontWeight.BOLD, color="white"),
-            bgcolor="#2563eb",
+            bgcolor="#10b981",
             border_radius=20,
             padding=make_padding(12, 6),
             on_click=lambda _: filtre_sec("Tümü")
         )
         filtre_gelir_btn = ft.Container(
-            content=ft.Text("🟢 Gelirler", size=11, weight=ft.FontWeight.BOLD, color="#64748b"),
-            bgcolor="#f1f5f9",
+            content=ft.Text("🟢 Gelirler", size=11, weight=ft.FontWeight.BOLD, color="#94a3b8"),
+            bgcolor="#162544",
             border_radius=20,
             padding=make_padding(12, 6),
             on_click=lambda _: filtre_sec("Gelir")
         )
         filtre_gider_btn = ft.Container(
-            content=ft.Text("🔴 Giderler", size=11, weight=ft.FontWeight.BOLD, color="#64748b"),
-            bgcolor="#f1f5f9",
+            content=ft.Text("🔴 Giderler", size=11, weight=ft.FontWeight.BOLD, color="#94a3b8"),
+            bgcolor="#162544",
             border_radius=20,
             padding=make_padding(12, 6),
             on_click=lambda _: filtre_sec("Gider")
@@ -3983,14 +3983,14 @@ def main(page: ft.Page):
 
         def filtre_butonlari_guncelle():
             f = secilen_filtre[0]
-            filtre_tumu_btn.bgcolor = "#2563eb" if f == "Tümü" else "#f1f5f9"
-            filtre_tumu_btn.content.color = "white" if f == "Tümü" else "#64748b"
+            filtre_tumu_btn.bgcolor = "#10b981" if f == "Tümü" else "#162544"
+            filtre_tumu_btn.content.color = "white" if f == "Tümü" else "#94a3b8"
 
-            filtre_gelir_btn.bgcolor = "#10b981" if f == "Gelir" else "#f1f5f9"
-            filtre_gelir_btn.content.color = "white" if f == "Gelir" else "#047857"
+            filtre_gelir_btn.bgcolor = "#10b981" if f == "Gelir" else "#162544"
+            filtre_gelir_btn.content.color = "white" if f == "Gelir" else "#94a3b8"
 
-            filtre_gider_btn.bgcolor = "#ef4444" if f == "Gider" else "#f1f5f9"
-            filtre_gider_btn.content.color = "white" if f == "Gider" else "#b91c1c"
+            filtre_gider_btn.bgcolor = "#f43f5e" if f == "Gider" else "#162544"
+            filtre_gider_btn.content.color = "white" if f == "Gider" else "#94a3b8"
             try:
                 filtre_tumu_btn.update()
                 filtre_gelir_btn.update()
@@ -4073,7 +4073,7 @@ def main(page: ft.Page):
             except Exception:
                 page.update()
 
-        form_ac_kapat_btn = make_button("➕ Yeni İşlem", bgcolor="#2563eb", color="white", height=40, expand=True, on_click=form_toggle)
+        form_ac_kapat_btn = make_button("➕ Yeni İşlem", bgcolor="#10b981", color="white", height=44, expand=True, on_click=form_toggle)
 
         form_govdesi = ft.Container(
             content=ft.Column([
@@ -6948,9 +6948,9 @@ def main(page: ft.Page):
                             )
                         )
 
-                # Son 2 saat içinde eklenen işlemler için belirgin altın/yeşil modern vurgu
-                kart_arkaplan = "#ecfdf5" if yeni_eklendi_mi else "#f8fafc"
-                kart_cerceve = make_border_all(2, "#059669") if yeni_eklendi_mi else make_border_all(1, "#f1f5f9")
+                # Option 1: Glassmorphic Slate & Emerald Kart Renkleri
+                kart_arkaplan = "#064e3b" if yeni_eklendi_mi else "#162544"
+                kart_cerceve = make_border_all(1.5, "#10b981") if yeni_eklendi_mi else make_border_all(1, "#1e293b")
 
                 satir = ft.Container(
                     content=ft.Row([
@@ -6965,8 +6965,8 @@ def main(page: ft.Page):
                             ),
                             ft.Column([
                                 # Uzun ürün isimleri kesilmesin diye wrap=True ve max_lines=2
-                                ft.Text(baslik, size=12.5, weight=ft.FontWeight.W_600, color="#0f172a", max_lines=2),
-                                ft.Text(alt_detay, size=10, color="#64748b"),
+                                ft.Text(baslik, size=12.5, weight=ft.FontWeight.W_600, color="#f8fafc", max_lines=2),
+                                ft.Text(alt_detay, size=10, color="#94a3b8"),
                                 ft.Row(alt_etiketler, spacing=4, wrap=True)
                             ], spacing=2, tight=True, expand=True)
                         ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START, expand=True),
@@ -7430,8 +7430,8 @@ def main(page: ft.Page):
                     donem_toggle_btn
                 ], alignment=ft.MainAxisAlignment.CENTER, spacing=6)
             ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-            bgcolor="white",
-            border=make_border_all(1, "#e2e8f0"),
+            bgcolor="#111d38",
+            border=make_border_all(1, "#1e293b"),
             border_radius=16,
             padding=make_padding(8, 6),
             width=355
@@ -7537,7 +7537,9 @@ def main(page: ft.Page):
             dense=True,
             content_padding=make_padding(10, 8),
             border_radius=8,
-            bgcolor="white",
+            bgcolor="#162544",
+            color="#f8fafc",
+            border_color="#334155",
             expand=True,
             text_size=12,
             on_change=arama_metni_degisti
@@ -7563,8 +7565,8 @@ def main(page: ft.Page):
 
                 # 2. İşlem Geçmişi Başlığı (Ortalanmış)
                 ft.Row([
-                    ft.Icon(ft.Icons.RECEIPT_LONG_ROUNDED, size=18, color="#0f172a"),
-                    ft.Text("İşlem Geçmişi", weight=ft.FontWeight.BOLD, size=15, color="#0f172a"),
+                    ft.Icon(ft.Icons.RECEIPT_LONG_ROUNDED, size=18, color="#34d399"),
+                    ft.Text("İşlem Geçmişi", weight=ft.FontWeight.BOLD, size=15, color="#f8fafc"),
                 ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
 
                 # 3. Yenile ve Toplu Sil Butonları (Ortalanmış)
@@ -8835,7 +8837,7 @@ def main(page: ft.Page):
                 secili_tema[0] = t_kod
                 tema_kaydet(t_kod)
                 if t_kod == "light":
-                    page.theme_mode = ft.ThemeMode.LIGHT
+                    page.theme_mode = ft.ThemeMode.DARK
                     page.bgcolor = "#f8fafc"
                 elif t_kod == "dark":
                     page.theme_mode = ft.ThemeMode.DARK
@@ -9368,10 +9370,10 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
             content=ft.Row([
                 sozel_input,
                 mic_btn,
-                make_button("✨ AI Ekle", height=36, bgcolor="#6366f1", color="white", on_click=sozel_islem_calistir)
+                make_button("✨ AI Ekle", height=36, bgcolor="#10b981", color="white", on_click=sozel_islem_calistir)
             ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            bgcolor="white",
-            border=make_border_all(1, "#e2e8f0"),
+            bgcolor="#111d38",
+            border=make_border_all(1, "#1e293b"),
             border_radius=14,
             padding=make_padding(6, 6),
             width=355
@@ -9379,7 +9381,7 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
 
         # Hızlı Aksiyon Butonları (CSV Menüye Taşındı; Ekranda 2 Büyük, Ferah ve Ortalı Ana Buton Kaldı)
         btn_yeni_islem = form_ac_kapat_btn
-        btn_fis_tara = make_button("📸 Fiş Tara", bgcolor="#7c3aed", color="white", height=44, tooltip="Fiş Fotoğrafı Yükle & AI ile Oku", expand=True, on_click=fis_tara_tiklandi)
+        btn_fis_tara = make_button("📸 Fiş Tara", bgcolor="#1e293b", color="#f8fafc", height=44, tooltip="Fiş Fotoğrafı Yükle & AI ile Oku", expand=True, on_click=fis_tara_tiklandi)
 
         hizli_aksiyon_bari = ft.Container(
             content=ft.Row([btn_yeni_islem, btn_fis_tara], spacing=10, alignment=ft.MainAxisAlignment.CENTER),
@@ -9389,9 +9391,9 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
         # Liste Konteyneri (Beyaz modern kart içine yerleştirilmiş temiz liste)
         liste_kapsayici = ft.Container(
             content=liste_arayuzu,
-            bgcolor="white",
-            border_radius=16,
-            border=make_border_all(1, "#e2e8f0"),
+            bgcolor="#0f172a",
+            border_radius=18,
+            border=make_border_all(1, "#1e293b"),
             padding=6,
             width=355
         )
