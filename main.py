@@ -28,6 +28,97 @@ except Exception:
 # ==============================================================================
 import difflib
 
+# ==============================================================================
+# Akıllı Birim Tahmin ve Ayrıştırma Motoru (Kullanıcı İsteği: Litre, Kg, Adet, Gram)
+# ==============================================================================
+def urun_birim_tahmin_et(urun_adi):
+    """Ürün ismine göre varsayılan ölçü birimini (litre, kg, g, paket, rulo, vb.) otomatik tahmin eder."""
+    u = tr_lower(urun_adi)
+    if not u:
+        return "adet"
+    
+    tokens = set(re.findall(r'\w+', u))
+
+    # 1. Rulo / Demet / Koli / Kutu
+    if any(w in u for w in ['tuvalet kağıdı', 'havlu kağıt', 'kağıt havlu', 'alüminyum folyo', 'streç film']):
+        return 'rulo'
+    if any(t in tokens for t in ['rulo']):
+        return 'rulo'
+    if any(w in u for w in ['maydanoz', 'dereotu', 'roka', 'tere', 'marul', 'taze soğan']) or 'demet' in tokens:
+        return 'demet'
+    if any(t in tokens for t in ['koli', 'yumurta']):
+        return 'koli'
+    if any(t in tokens for t in ['kutu', 'tablet', 'ilaç', 'pastil', 'kibrit', 'konserve']):
+        return 'kutu'
+    if any(t in tokens for t in ['paket', 'bisküvi', 'kraker', 'cips', 'mendil', 'sigara', 'makarna', 'çay', 'margarin']):
+        return 'paket'
+
+    # 2. Litre grubu
+    litre_exact = {'süt', 'su', 'ayran', 'kola', 'fanta', 'gazoz', 'limonata', 'şalgam', 'sirke', 'deterjan', 'yumuşatıcı', 'şampuan', 'kolonya', 'kefir', 'boza', 'mazot', 'benzin', 'motorin', 'lpg', 'soda'}
+    litre_phrases = ['sıvı yağ', 'zeytinyağı', 'ayçiçek yağı', 'meyve suyu', 'çamaşır suyu', 'maden suyu', 'bulaşık deterjanı', 'yüzey temizleyici']
+    if any(p in u for p in litre_phrases) or any(t in tokens for t in litre_exact) or any(u.endswith(x) for x in [' l', ' lt', ' litre']):
+        return 'litre'
+
+    # 3. Gram grubu
+    gram_exact = {'baharat', 'karabiber', 'kimyon', 'kekik', 'nane', 'tuz', 'maya', 'vanilya', 'çikolata', 'gofret', 'fıstık', 'badem', 'salça', 'krema'}
+    gram_phrases = ['pul biber', 'kabartma tozu', 'toz biber', 'kara biber']
+    if any(p in u for p in gram_phrases) or any(t in tokens for t in gram_exact) or any(u.endswith(x) for x in [' g', ' gr', ' gram']):
+        return 'g'
+
+    # 4. Kg grubu
+    kg_exact = {'kıyma', 'kuşbaşı', 'et', 'tavuk', 'balık', 'peynir', 'kaşar', 'lor', 'çökelek', 'zeytin', 'patates', 'soğan', 'sarımsak', 'domates', 'salatalık', 'biber', 'patlıcan', 'kabak', 'havuç', 'elma', 'portakal', 'mandalina', 'muz', 'karpuz', 'kavun', 'üzüm', 'armut', 'şeftali', 'un', 'şeker', 'pirinç', 'bulgur', 'nohut', 'mercimek', 'fasulye', 'hamsi', 'somon', 'sucuk', 'salam', 'sosis', 'ceviz', 'fındık', 'kestane', 'çilek', 'kiraz', 'vişne'}
+    kg_phrases = ['toz şeker', 'dana kıyma', 'kuzu kıyma', 'tavuk göğsü', 'tavuk pirzola', 'beyaz peynir', 'kaşar peynir']
+    if any(p in u for p in kg_phrases) or any(t in tokens for t in kg_exact) or any(u.endswith(x) for x in [' kg', ' kilo']):
+        return 'kg'
+
+    # 5. Adet (Varsayılan)
+    return 'adet'
+
+def ayristir_miktar_ve_birim(miktar_raw, varsayilan_urun=''):
+    """Miktar metnini (örn: '2.04 kg', '5 adet') sayısal miktar ve ölçü birimi olarak ikiye ayırır."""
+    tahmin_birim = urun_birim_tahmin_et(varsayilan_urun) if varsayilan_urun else 'adet'
+    if not miktar_raw:
+        return '', tahmin_birim
+    s = str(miktar_raw).strip()
+    match = re.search(r'[-+]?\d*[\.,]?\d+', s)
+    if not match:
+        return '', s.lower() if s else tahmin_birim
+    sayi_str = match.group(0).replace(',', '.')
+    try:
+        f_val = float(sayi_str)
+        sayi_str = str(int(f_val)) if f_val == int(f_val) else str(f_val)
+    except Exception:
+        pass
+    
+    kalan = s[match.end():].strip().lower()
+    if not kalan:
+        kalan = s[:match.start()].strip().lower()
+    if not kalan:
+        kalan = tahmin_birim
+    return sayi_str, kalan
+
+def miktar_ozeti_olustur(islem_listesi):
+    """İşlem listesindeki miktarları birim bazında gruplayıp toplar (örn: '15 adet, 3.5 kg, 2 litre')."""
+    birim_toplamlari = {}
+    for it in islem_listesi:
+        m = it.get('miktar')
+        sayi, birim = ayristir_miktar_ve_birim(m)
+        if sayi and birim:
+            try:
+                flt_sayi = float(sayi)
+                birim_toplamlari[birim] = birim_toplamlari.get(birim, 0.0) + flt_sayi
+            except Exception:
+                pass
+    
+    if not birim_toplamlari:
+        return ''
+    parcalar = []
+    for b, t in sorted(birim_toplamlari.items(), key=lambda x: -x[1]):
+        t_str = f'{int(t)}' if t == int(t) else f'{t:.2f}'.rstrip('0').rstrip('.')
+        parcalar.append(f'{t_str} {b}')
+    return ', '.join(parcalar)
+
+
 def tr_lower(text):
     """Türkçe karakterleri (İ, I, vb.) kayıpsız küçük harfe dönüştürür."""
     if not text:
@@ -556,43 +647,21 @@ def _android_ses_ve_titresim():
         pass
 
 def dokunma_geribildirimi():
-    """Buton tıklamalarında hem masaüstünde hem de telefonda ses ve dokunma titreşimi üretir."""
-    # 1. Bilgisayar Ses Motoru
-    try:
-        threading.Thread(target=_pc_tiklama_sesi_cal, daemon=True).start()
-    except Exception:
-        pass
+    """Buton tıklamalarında gecikme yapmayan ultra hafif dokunma geri bildirimi."""
+    # 1. Bilgisayar Ses Motoru (Sadece masaüstü Windows ortamında ve thread açmadan)
+    if sys.platform.startswith("win"):
+        try:
+            _pc_tiklama_sesi_cal()
+        except Exception:
+            pass
 
-    # 2. Android Donanım Ses & Titreşim Motoru
-    try:
-        threading.Thread(target=_android_ses_ve_titresim, daemon=True).start()
-    except Exception:
-        pass
-
-    # 3. Flet Mobil Haptic Feedback Servisi (Android / iOS)
+    # 2. Flet Mobil Haptic Feedback Servisi (Android / iOS doğrudan hafif titreşim)
     if _haptic_instance:
         try:
             if hasattr(_haptic_instance, "selection_click"):
-                res = _haptic_instance.selection_click()
-                if asyncio.iscoroutine(res):
-                    try:
-                        asyncio.create_task(res)
-                    except Exception:
-                        pass
+                _haptic_instance.selection_click()
             elif hasattr(_haptic_instance, "light_impact"):
-                res = _haptic_instance.light_impact()
-                if asyncio.iscoroutine(res):
-                    try:
-                        asyncio.create_task(res)
-                    except Exception:
-                        pass
-            elif hasattr(_haptic_instance, "vibrate"):
-                res = _haptic_instance.vibrate()
-                if asyncio.iscoroutine(res):
-                    try:
-                        asyncio.create_task(res)
-                    except Exception:
-                        pass
+                _haptic_instance.light_impact()
         except Exception:
             pass
 
@@ -3337,8 +3406,23 @@ def main(page: ft.Page):
         )
 
         gider_miktar = ft.TextField(label="Miktar", width=115, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
-        birim_listesi = ["adet", "litre", "kg", "g", "ml", "paket", "koli", "demet", "kutu", "porsiyon", "metre"]
-        gider_birim_secimi = make_dropdown(label="Birim", options=birim_listesi, value=None, width=140, dense=True)
+        birim_listesi = ["adet", "litre", "kg", "g", "ml", "paket", "koli", "demet", "kutu", "rulo", "porsiyon", "metre"]
+        gider_birim_secimi = make_dropdown(label="Birim", options=birim_listesi, value="adet", width=140, dense=True)
+
+        def on_gider_urun_degisti(e):
+            u = (gider_urun.value or "").strip()
+            if u:
+                tahmin = urun_birim_tahmin_et(u)
+                if tahmin:
+                    mevcut_b = [opt.key if hasattr(opt, "key") and opt.key else getattr(opt, "text", "") for opt in gider_birim_secimi.options]
+                    if tahmin not in mevcut_b:
+                        gider_birim_secimi.options.append(make_option(tahmin))
+                    gider_birim_secimi.value = tahmin
+                    try:
+                        gider_birim_secimi.update()
+                    except Exception:
+                        pass
+        gider_urun.on_change = on_gider_urun_degisti
 
         def yeni_birim_dialog_ac(e):
             yeni_birim_input = ft.TextField(label="Yeni Birim (Örn: rulo, kova)", autofocus=True, width=280)
@@ -6118,8 +6202,29 @@ def main(page: ft.Page):
                 duzenle_market_tumu_chk = ft.Checkbox(label="Bu market ismini tüm geçmiş ve gelecek işlemlerde güncelle", value=True)
                 duzenle_urun = ft.TextField(label="Ürün / Hizmet", value=item.get("urun", ""), width=310, dense=True)
                 duzenle_kat = make_dropdown(options=kat_secenekleri, value=mevcut_kat, label="Kategori", width=310, dense=True)
-                duzenle_miktar = ft.TextField(label="Miktar", value=item.get("miktar", ""), width=150, dense=True)
-                duzenle_birim_fiyat = ft.TextField(label="Birim Fiyat (TL)", value=str(item.get("birim_fiyat", 0.0)), width=150, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
+                
+                ilk_m_sayi, ilk_m_birim = ayristir_miktar_ve_birim(item.get("miktar", ""), item.get("urun", ""))
+                duzenle_miktar = ft.TextField(label="Miktar", value=ilk_m_sayi, width=100, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
+                duzenle_birim_secenekleri = list(birim_listesi)
+                if ilk_m_birim and ilk_m_birim not in duzenle_birim_secenekleri:
+                    duzenle_birim_secenekleri.append(ilk_m_birim)
+                duzenle_birim = make_dropdown(options=duzenle_birim_secenekleri, value=ilk_m_birim, label="Birim", width=105, dense=True)
+                duzenle_birim_fiyat = ft.TextField(label="Birim Fiyat (TL)", value=str(item.get("birim_fiyat", 0.0)), width=95, dense=True, keyboard_type=ft.KeyboardType.NUMBER)
+
+                def on_duzenle_urun_degisti(e):
+                    u = (duzenle_urun.value or "").strip()
+                    if u:
+                        tahmin = urun_birim_tahmin_et(u)
+                        if tahmin:
+                            mevcut_b = [opt.key if hasattr(opt, "key") and opt.key else getattr(opt, "text", "") for opt in duzenle_birim.options]
+                            if tahmin not in mevcut_b:
+                                duzenle_birim.options.append(make_option(tahmin))
+                            duzenle_birim.value = tahmin
+                            try:
+                                duzenle_birim.update()
+                            except Exception:
+                                pass
+                duzenle_urun.on_change = on_duzenle_urun_degisti
 
                 # 3'lü Dinamik Hesaplama (Miktar, Birim Fiyat, Toplam Tutar)
                 duzenle_hesaplaniyor = [False]
@@ -6226,7 +6331,7 @@ def main(page: ft.Page):
                     duzenle_market_tumu_chk,
                     duzenle_urun,
                     duzenle_kat,
-                    ft.Row([duzenle_miktar, duzenle_birim_fiyat], spacing=10),
+                    ft.Row([duzenle_miktar, duzenle_birim, duzenle_birim_fiyat], spacing=5),
                     duzenle_tutar,
                     ft.Text("💡 İkisini girince üçüncüsü (Miktar, Birim Fiyat, Tutar) otomatik hesaplanır.", size=10, color="#64748b"),
                     ft.Row([duzenle_tarih, duzenle_saat], spacing=10)
@@ -6285,7 +6390,10 @@ def main(page: ft.Page):
                     yeni_urun_val = duzenle_urun.value.strip()
                     item["urun"] = yeni_urun_val
                     item["kategori"] = yeni_kat_val
-                    item["miktar"] = duzenle_miktar.value.strip()
+                    m_val_str = duzenle_miktar.value.strip()
+                    b_val_str = (duzenle_birim.value or "adet").strip()
+                    item["miktar"] = f"{m_val_str} {b_val_str}".strip() if m_val_str else ""
+                    item["birim"] = b_val_str
 
                     # Kullanıcı Kuralı: Bir ürünün kategorisi değiştirildiğinde o ürünle %100 aynı isimde olan tüm ürünlerin kategorisi otomatik olarak değişsin
                     guncellenen_ayni_urun = 0
@@ -6354,12 +6462,6 @@ def main(page: ft.Page):
         # --- ARAYÜZ VE BAKİYE HESAPLAMA ---
         def arayuzu_guncelle():
             if islemler:
-                temiz_islem = mukerrer_kayitlari_temizle(islemler)
-                if len(temiz_islem) != len(islemler):
-                    islemler.clear()
-                    islemler.extend(temiz_islem)
-                islemler_yerel_cache_kaydet(islemler)
-
                 # Kullanıcı Kuralı: Çocuklara verilen okul harçlıklarını 'Eğitim, Okul & Kırtasiye' kategorisine aktar
                 for itm_h in islemler:
                     if itm_h.get("tur") == "Gider" and "okul harçlığı" in str(itm_h.get("urun", "")).lower():
@@ -6563,6 +6665,11 @@ def main(page: ft.Page):
                         fiyat_detayi += ")"
 
                     toplam_harcanan = sum(float(x.get("tutar") or 0.0) for x in tum_eslesmeler)
+                    tum_miktar_ozeti = miktar_ozeti_olustur(tum_eslesmeler)
+
+                    donem_eslesmeler = list(donem_islemleri)
+                    donem_harcanan = sum(float(x.get("tutar") or 0.0) for x in donem_eslesmeler)
+                    donem_miktar_ozeti = miktar_ozeti_olustur(donem_eslesmeler)
 
                     def tum_zamanlari_ac_aksiyon(ev):
                         tum_zamanlar_modu[0] = True
@@ -6588,8 +6695,40 @@ def main(page: ft.Page):
                             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                             ft.Row([
                                 ft.Text(f"📅 {es_tarih} {es_saat} • 👤 {es_kullanici}", size=10.5, color="#64748b"),
-                                ft.Text(f"Toplam {len(tum_eslesmeler)} kez alındı ({toplam_harcanan:,.2f} TL)", size=10.5, color="#2563eb", weight=ft.FontWeight.W_600)
-                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            ]),
+                            ft.Divider(height=6, thickness=0.8, color="#bfdbfe"),
+                            ft.Row([
+                                ft.Container(
+                                    content=ft.Column([
+                                        ft.Row([
+                                            ft.Icon(ft.Icons.CALENDAR_TODAY_ROUNDED, size=12, color="#1d4ed8"),
+                                            ft.Text("📅 Seçili Dönemde", size=10.5, weight=ft.FontWeight.BOLD, color="#1e40af")
+                                        ], spacing=3),
+                                        ft.Text(f"{len(donem_eslesmeler)} kez • {donem_harcanan:,.2f} TL", size=11, weight=ft.FontWeight.BOLD, color="#0f172a"),
+                                        ft.Text(f"Miktar: {donem_miktar_ozeti}" if donem_miktar_ozeti else f"{len(donem_eslesmeler)} işlem", size=9.5, color="#475569")
+                                    ], spacing=2),
+                                    bgcolor="#ffffff",
+                                    border=make_border_all(1, "#bfdbfe"),
+                                    border_radius=8,
+                                    padding=make_padding(8, 6),
+                                    expand=True
+                                ),
+                                ft.Container(
+                                    content=ft.Column([
+                                        ft.Row([
+                                            ft.Icon(ft.Icons.ALL_INCLUSIVE_ROUNDED, size=12, color="#047857"),
+                                            ft.Text("🌐 Tüm Zamanlarda", size=10.5, weight=ft.FontWeight.BOLD, color="#065f46")
+                                        ], spacing=3),
+                                        ft.Text(f"{len(tum_eslesmeler)} kez • {toplam_harcanan:,.2f} TL", size=11, weight=ft.FontWeight.BOLD, color="#0f172a"),
+                                        ft.Text(f"Miktar: {tum_miktar_ozeti}" if tum_miktar_ozeti else f"{len(tum_eslesmeler)} işlem", size=9.5, color="#475569")
+                                    ], spacing=2),
+                                    bgcolor="#ffffff",
+                                    border=make_border_all(1, "#a7f3d0"),
+                                    border_radius=8,
+                                    padding=make_padding(8, 6),
+                                    expand=True
+                                )
+                            ], spacing=6),
                             make_button(
                                 f"🌐 Tüm Zamanlardaki {len(tum_eslesmeler)} Kaydı Gör",
                                 height=26,
@@ -9286,10 +9425,10 @@ Yalnızca aşağıdaki şemaya uygun SAF JSON döndür (markdown kod bloğu ekle
         def arka_plan_bildirim_tara():
             while True:
                 try:
-                    time.sleep(3)
+                    time.sleep(2)
                     if not supabase:
                         continue
-                    res = supabase.table("islemler").select("*").order("id", desc=True).limit(35).execute()
+                    res = supabase.table("islemler").select("*").order("id", desc=True).limit(40).execute()
                     if res and res.data:
                         degisiklik_var = False
                         for it in res.data:
